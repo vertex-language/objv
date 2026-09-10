@@ -101,9 +101,10 @@ func TestDarwinResolve(t *testing.T) {
 	if got, want := r.LibraryDirs, []string{"/usr/local/lib", sdkPath + "/usr/lib"}; !eq(got, want) {
 		t.Errorf("library dirs = %v, want %v", got, want)
 	}
-	// libSystem re-exports libobjc, which is why an Objective-C program
-	// links with -lSystem and nothing else.
-	if got, want := r.Libraries, []string{"System"}; !eq(got, want) {
+	// libSystem is the C runtime and libobjc the Objective-C one. clang
+	// gets the second implicitly, because ld64 links it when an object
+	// carries __objc_imageinfo; objv names it.
+	if got, want := r.Libraries, []string{"System", "objc"}; !eq(got, want) {
 		t.Errorf("libraries = %v, want %v", got, want)
 	}
 	if len(r.Notes) != 0 {

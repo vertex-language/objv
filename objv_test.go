@@ -436,6 +436,81 @@ int main(void) {
 	}
 }
 
+// The same, for a program that is actually Objective-C.
+//
+// This is the one that says the compiler works. Everything in it has to be
+// right at once: the class and metaclass objects and the four links between
+// them, the read-only halves, the method and ivar lists, the offset variable
+// every instance-variable access loads, the selector references the runtime
+// rewrites at load, the category the runtime attaches to a class it did not
+// compile, and the sections all of it lives in — none of which is reachable
+// from any call, so nothing but running the program tests it.
+//
+// The classes it inherits from are libobjc's own: +alloc and -init come from
+// the real NSObject, so the metaclass chain has to reach a class this
+// compiler never saw.
+func TestBuildAndRunObjectiveC(t *testing.T) {
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		t.Skip("the binary this produces runs on arm64 macOS")
+	}
+	out := filepath.Join(t.TempDir(), "prog")
+
+	var c objv.Compiler
+	err := c.Build(objv.BuildParams{
+		Output: out,
+		Inputs: []objv.Input{objv.Text("prog.m", []byte(`
+@interface NSObject
++ (id)alloc;
+- (id)init;
+@end
+
+@interface Counter : NSObject {
+    int _n;
+}
+- (int)value;
+- (void)add:(int)k;
++ (int)base;
+@end
+
+@implementation Counter
+- (int)value { return _n; }
+- (void)add:(int)k { _n = _n + k; }
++ (int)base { return 3; }
+@end
+
+// A category, which the runtime attaches at load: its method is not in the
+// class's own method list and is found only because __objc_catlist was
+// walked.
+@interface Counter (Doubling)
+- (int)doubled;
+@end
+
+@implementation Counter (Doubling)
+- (int)doubled { return [self value] * 2; }
+@end
+
+int main(void) {
+    Counter *c = [[Counter alloc] init];
+    for (int i = 1; i <= 4; i++) [c add:i];
+    return [c doubled] + [Counter base];   // (1+2+3+4)*2 + 3 = 23
+}
+`))},
+	})
+	if err != nil {
+		var de *objv.DiagnosticError
+		if errors.As(err, &de) {
+			t.Fatalf("build: %v", de)
+		}
+		t.Skipf("link is not available here: %v", err)
+	}
+
+	cmd := exec.Command(out)
+	_ = cmd.Run()
+	if got := cmd.ProcessState.ExitCode(); got != 23 {
+		t.Errorf("the program exited %d, want 23", got)
+	}
+}
+
 // A program that is wrong comes back as a *DiagnosticError; every other error
 // means objv could not run.
 func TestBuildReportsTheProgram(t *testing.T) {

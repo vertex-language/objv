@@ -65,10 +65,15 @@ func darwinResolve(h Host, opt Options, r *Result) {
 		sdk.Path + "/usr/lib",
 	})
 
-	// libSystem re-exports libobjc on Darwin, which is why clang links an
-	// Objective-C program with -lSystem and nothing else — checked by
-	// reading what `clang -v` hands ld for a file with a class in it.
-	r.Libraries = []string{"System"}
+	// libSystem is the C runtime; libobjc is the Objective-C one, and its
+	// stub is where __objc_empty_cache and objc_msgSend actually live.
+	//
+	// clang hands ld nothing but -lSystem and gets libobjc anyway, because
+	// ld64 links it implicitly when an object carries __objc_imageinfo.
+	// objv names it instead. The two produce the same binary, and naming
+	// what a program needs is better than relying on a linker noticing —
+	// especially from a compiler whose every output carries that section.
+	r.Libraries = []string{"System", "objc"}
 
 	r.Deployment = darwinDeployment(h, opt, sdk, r)
 

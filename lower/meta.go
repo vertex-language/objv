@@ -171,20 +171,49 @@ func (u *unit) emitClass(k *types.Class) {
 	ro := u.emitClassRO(runtime.ClassROSymbol(k.Name), uint32(flags),
 		start, size, name, instMethods, protocols, ivars, props)
 
-	// A root class's metaclass is its own isa, which is what closes the
-	// chain the runtime walks looking for a class method.
-	// A root class's metaclass has itself as its isa and the class as its
-	// superclass, which is what closes the chain the runtime walks looking
-	// for a class method.
+	// The two objects and the four links between them.
+	//
+	// There are only four, and every one of them is a different rule:
+	//
+	//	                isa                       superclass
+	//	class           its own metaclass         the superclass, or null
+	//	metaclass       the *root* metaclass      the superclass's metaclass
+	//
+	// A root class's superclass is null and not itself. The runtime walks
+	// superclasses to find a method and to compute an instance size, and a
+	// class that is its own superclass is a loop the program hangs in
+	// before main is reached.
+	//
+	// A metaclass's superclass is the superclass's *metaclass*, not its
+	// class — that is the chain a class-method lookup walks, and pointing
+	// it at the class instead sends +initialize to an instance and aborts
+	// the process at load. A root metaclass is where it ends: its isa is
+	// itself and its superclass is its own class, which is what makes
+	// +alloc on any class eventually find NSObject's.
+	//
+	// All four were read off what clang emits, for a root class and for a
+	// subclass, and each of the two mistakes above cost a program that
+	// linked and would not run.
+	//
+	// Both symbols already exist: declareClass created them before any body
+	// was lowered, so naming one from the other needs no ordering.
 	metaName := runtime.MetaclassSymbol(k.Name)
 	clsName := runtime.ClassSymbol(k.Name)
-	superMeta, superCls := metaName, clsName
-	if k.Super != nil {
-		superMeta = runtime.MetaclassSymbol(k.Super.Name)
-		superCls = runtime.ClassSymbol(k.Super.Name)
+
+	root := k
+	for root.Super != nil {
+		root = root.Super
 	}
-	meta := u.emitClassObject(metaName, u.classSymbol(superMeta), u.classSymbol(superCls), metaRO)
-	u.emitClassObject(clsName, meta, u.classSymbol(superCls), ro)
+	metaIsa := u.classSymbol(runtime.MetaclassSymbol(root.Name))
+
+	metaSuper := u.classSymbol(clsName) // a root metaclass's is its class
+	var clsSuper ir.Symbol              // and a root class has none
+	if k.Super != nil {
+		metaSuper = u.classSymbol(runtime.MetaclassSymbol(k.Super.Name))
+		clsSuper = u.classSymbol(runtime.ClassSymbol(k.Super.Name))
+	}
+	meta := u.emitClassObject(metaName, metaIsa, metaSuper, metaRO)
+	u.emitClassObject(clsName, meta, clsSuper, ro)
 
 	// The list the runtime scans. One entry per class the image defines.
 	u.classList = append(u.classList, u.classSyms[clsName])
@@ -254,11 +283,11 @@ func (u *unit) emitClassObject(name string, isa, super ir.Symbol, ro ir.Symbol) 
 		u.classSyms[name] = g
 	}
 	g.Init(ir.List(
-		ir.RelocInit(isa),
-		ir.RelocInit(super),
+		orNull(isa),
+		orNull(super),
 		ir.RelocInit(u.emptyCache()),
 		ir.Lit(ir.Int(0)),
-		ir.RelocInit(ro),
+		orNull(ro),
 	))
 	return g
 }
