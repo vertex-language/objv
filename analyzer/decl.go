@@ -263,6 +263,14 @@ func (c *checker) recordType(st *ast.StructType) types.Type {
 	}
 	c.applyRecordAttrs(rec, st.Attrs)
 
+	// The ceiling `#pragma pack` had in force where the specifier was
+	// written. It is a property of the declaration site — <mach/message.h>
+	// wraps three hundred lines in `#pragma pack(push, 4)` — and it applies
+	// whether or not the struct also carries an attribute, since the two
+	// answer different questions: the pragma caps every member's alignment,
+	// __attribute__((packed)) removes the padding outright.
+	rec.Pack = st.Pack
+
 	if st.Defs != nil {
 		// §5.8's @defs, which yields a class's instance-variable layout as
 		// members. It is legacy-runtime only, and the modern runtime — the
@@ -419,7 +427,7 @@ func (c *checker) enumType(ed *ast.EnumDecl) types.Type {
 			switch {
 			case !ok:
 				c.report(ed, "'"+name+"' declared as a different kind of tag")
-			case ed.Lbrace.IsValid() && e.Complete && c.currentTag(name) == prev:
+			case ed.Lbrace.IsValid() && e.Defined && c.currentTag(name) == prev:
 				c.report(ed, "redefinition of 'enum "+name+"'")
 			default:
 				en = e
@@ -489,6 +497,7 @@ func (c *checker) enumType(ed *ast.EnumDecl) types.Type {
 		s.typ = en.ConstType()
 	}
 	en.Complete = true
+	en.Defined = true
 	return en
 }
 
@@ -497,14 +506,32 @@ func (c *checker) enumType(ed *ast.EnumDecl) types.Type {
 // there is nothing to choose.
 func (c *checker) checkEnumFits(ed *ast.EnumDecl, en *types.Enum, values []int64) {
 	t := types.Typ(en.Underlying())
-	hi := int64(c.model.IntMax(t))
-	lo := int64(0)
-	if types.IsSigned(t) {
-		lo = -hi - 1
+	max := c.model.IntMax(t) // unsigned: as wide as uint64 goes
+
+	// The comparison is unsigned where the type is, because the maximum of
+	// an unsigned long does not fit in an int64: read as one it is -1, and
+	// every enumerator in every CF_OPTIONS in the SDK is "too large".
+	//
+	// A value whose top bit is set arrives here as a negative int64 and is
+	// not out of range — `NSAlignRectFlipped = 1ULL << 63` is exactly
+	// representable in the unsigned long long it was declared with. The
+	// conversion to uint64 is the whole check: a value too wide for a
+	// narrower unsigned type is still greater than its maximum.
+	if !types.IsSigned(t) {
+		for i, v := range values {
+			if uint64(v) > max {
+				c.report(ed.List[i],
+					"enumerator value does not fit in the underlying type "+t.String())
+				return
+			}
+		}
+		return
 	}
+	hi := int64(max)
 	for i, v := range values {
-		if v < lo || v > hi {
-			c.report(ed.List[i], "enumerator value does not fit in the underlying type "+t.String())
+		if v < -hi-1 || v > hi {
+			c.report(ed.List[i],
+				"enumerator value does not fit in the underlying type "+t.String())
 			return
 		}
 	}

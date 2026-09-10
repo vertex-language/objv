@@ -447,6 +447,25 @@ var aliases = map[string]Kind{
 	"__nonnull":          NONNULL,
 	"__nullable":         NULLABLE,
 	"__null_unspecified": NULL_UNSPECIFIED,
+
+	// gcc's double-underscore spellings of the C keywords. They exist so
+	// a header can use a keyword in a translation unit compiled with
+	// -ansi, where the keyword itself would not be one, and they never
+	// went away: Apple's own headers write `extern __inline
+	// __attribute__((__gnu_inline__))` more than a hundred times in
+	// Foundation's transitive closure alone.
+	"__inline":     INLINE,
+	"__inline__":   INLINE,
+	"__const":      CONST,
+	"__const__":    CONST,
+	"__volatile":   VOLATILE,
+	"__volatile__": VOLATILE,
+	"__signed":     SIGNED,
+	"__signed__":   SIGNED,
+	"__restrict":   RESTRICT,
+	"__restrict__": RESTRICT,
+	"__complex":    COMPLEX,
+	"__complex__":  COMPLEX,
 }
 
 // constants are the spellings §2.3 makes a BooleanConstant rather than

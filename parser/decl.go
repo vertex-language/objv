@@ -69,6 +69,21 @@ func (p *parser) parseDeclOrFunc(lo token.Pos, attrs []*ast.Attr) ast.Decl {
 			Span: ast.Span{Lo: attrs[0].Pos(), Hi: attrs[len(attrs)-1].End()}, Attrs: attrs,
 		}}, specs...)
 	}
+	// An @interface behind an export macro. Apple's own root class is
+	// declared as
+	//
+	//	OBJC_ROOT_CLASS OBJC_EXPORT @interface NSObject <NSObject>
+	//
+	// where OBJC_EXPORT is `extern __attribute__((visibility("default")))`,
+	// so what precedes the @ is a whole declaration-specifier list and not
+	// only the attribute sequence §4.1 admits. clang accepts it and drops
+	// the storage class, which is the only thing to do: a class has no
+	// linkage of its own to give one to.
+	switch p.kind() {
+	case token.AT_INTERFACE, token.AT_PROTOCOL, token.AT_IMPLEMENTATION:
+		return p.parseObjCDecl(lo, append(attrs, attrsOfSpecs(specs)...))
+	}
+
 	if p.at(token.SEMI) {
 		semi := p.pos()
 		p.next()
@@ -84,6 +99,20 @@ func (p *parser) parseDeclOrFunc(lo token.Pos, attrs []*ast.Attr) ast.Decl {
 		return p.parseFuncDef(lo, specs, d)
 	}
 	return p.finishGenDecl(lo, specs, d)
+}
+
+// attrsOfSpecs is the attributes a declaration-specifier list carried, for
+// the one place a list turns out to have been a prelude to an @interface.
+// Everything else in it — the storage class, a stray type specifier — is
+// dropped, because a class declaration has nowhere to put it.
+func attrsOfSpecs(specs ast.DeclSpecs) []*ast.Attr {
+	var out []*ast.Attr
+	for _, s := range specs {
+		if a, ok := s.(*ast.AttrSpec); ok {
+			out = append(out, a.Attrs...)
+		}
+	}
+	return out
 }
 
 // startsKRList reports whether a K&R parameter declaration list follows a
@@ -200,11 +229,94 @@ func (p *parser) parseStaticAssert() *ast.StaticAssertDecl {
 }
 
 // skipDirectiveLine consumes a stray '#' line.
+var debugPack = false
+
 func (p *parser) skipDirectiveLine() {
+	start := p.i
 	p.next()
 	for !p.at(token.EOF) && !p.tok().Flags.Has(token.FlagNLBefore) {
 		p.next()
 	}
+	p.readPragma(p.toks[start:p.i])
+	if debugPack {
+		println("pragma line len", p.i-start, "pack now", p.pack)
+	}
+}
+
+// readPragma acts on the pragmas phase 7 owns.
+//
+// There is one: `#pragma pack`, which sets a ceiling on every member
+// alignment in the structures declared after it. Everything else is passed
+// over — a pragma the compiler does not implement is not an error, and the
+// scanner already said one reached here.
+//
+// The forms are Microsoft's, which gcc and clang both adopted:
+//
+//	#pragma pack(N)          set the ceiling to N
+//	#pragma pack()           remove it
+//	#pragma pack(push, N)    remember the current one and set N
+//	#pragma pack(push)       remember it and keep it
+//	#pragma pack(pop)        restore the last remembered one
+func (p *parser) readPragma(line []token.Token) {
+	// line is `#` `pragma` `pack` `(` ... `)`.
+	if len(line) < 3 || !p.tokIs(line[1], "pragma") || !p.tokIs(line[2], "pack") {
+		return
+	}
+	args := line[3:]
+	if len(args) < 2 || args[0].Kind != token.LPAREN {
+		return
+	}
+	args = args[1:]
+	if n := len(args); n > 0 && args[n-1].Kind == token.RPAREN {
+		args = args[:n-1]
+	}
+
+	switch {
+	case len(args) == 0:
+		p.pack = 0
+	case p.tokIs(args[0], "pop"):
+		if n := len(p.packStack); n > 0 {
+			p.pack = p.packStack[n-1]
+			p.packStack = p.packStack[:n-1]
+		} else {
+			p.pack = 0
+		}
+	case p.tokIs(args[0], "push"):
+		p.packStack = append(p.packStack, p.pack)
+		if len(args) >= 3 && args[1].Kind == token.COMMA {
+			p.pack = p.packValue(args[2])
+		}
+	default:
+		p.pack = p.packValue(args[0])
+	}
+}
+
+// packValue reads the alignment a pack pragma named. A value that is not a
+// power of two is ignored rather than reported: the pragma is an extension
+// with no standard to violate, and a compiler that refused one would refuse
+// a header it otherwise understands.
+func (p *parser) packValue(t token.Token) int64 {
+	if t.Kind != token.INT_LIT {
+		return p.pack
+	}
+	var n int64
+	for _, c := range p.f.Slice(t.Pos, t.End) {
+		if c < '0' || c > '9' {
+			return p.pack
+		}
+		n = n*10 + int64(c-'0')
+		if n > 1<<20 {
+			return p.pack
+		}
+	}
+	if n == 0 || n&(n-1) != 0 {
+		return p.pack
+	}
+	return n
+}
+
+func (p *parser) tokIs(t token.Token, word string) bool {
+	return string(p.f.Slice(t.Pos, t.End)) == word
 }
 
 // ---- declaration specifiers (§5) ----
@@ -663,7 +775,7 @@ func (p *parser) expectRangle() token.Pos {
 
 func (p *parser) parseStructType() *ast.StructType {
 	lo := p.pos()
-	s := &ast.StructType{Keyword: p.pos(), Kind: p.kind()}
+	s := &ast.StructType{Keyword: p.pos(), Kind: p.kind(), Pack: p.pack}
 	p.next()
 	if p.at(token.ATTRIBUTE) {
 		s.Attrs = append(s.Attrs, p.parseAttrSpecList()...)
@@ -947,12 +1059,32 @@ func (p *parser) parseDeclarator(m dmode) ast.Declarator {
 		return &ast.BadDeclarator{Span: p.span(lo)}
 	}
 
+	// An attribute may lead a declarator, where it belongs to the pointer
+	// or block pointer that follows it:
+	//
+	//	void (__attribute__((noescape)) ^)(NSUInteger idx, BOOL *stop)
+	//
+	// which is how every enumerate…UsingBlock: in Foundation is declared.
+	// Written after the '^' it would be an ordinary qualifier-position
+	// attribute; written before, it is still one, and this is what makes
+	// the two spellings mean the same thing.
+	var lead ast.DeclSpecs
+	if p.at(token.ATTRIBUTE) {
+		attrs := p.parseAttrSpecList()
+		if len(attrs) > 0 {
+			lead = ast.DeclSpecs{&ast.AttrSpec{
+				Span:  ast.Span{Lo: attrs[0].Pos(), Hi: attrs[len(attrs)-1].End()},
+				Attrs: attrs,
+			}}
+		}
+	}
+
 	// Pointer: * or ^, each with its own qualifier list, and each nesting.
 	switch p.kind() {
 	case token.MUL:
 		d := &ast.PtrDeclarator{Star: p.pos()}
 		p.next()
-		d.Quals = p.parseQualList()
+		d.Quals = append(lead, p.parseQualList()...)
 		if p.startsDeclaratorTail(m) {
 			d.Inner = p.parseDeclarator(m)
 		}
@@ -963,7 +1095,7 @@ func (p *parser) parseDeclarator(m dmode) ast.Declarator {
 		// §5.7's block pointer. It occupies the position a '*' would.
 		d := &ast.BlockPtrDeclarator{Caret: p.pos()}
 		p.next()
-		d.Quals = p.parseQualList()
+		d.Quals = append(lead, p.parseQualList()...)
 		if p.startsDeclaratorTail(m) {
 			d.Inner = p.parseDeclarator(m)
 		}
@@ -1075,14 +1207,49 @@ func (p *parser) parseDeclaratorTail() {
 // parenIsGrouping decides whether a '(' after nothing opens a grouping
 // declarator or a parameter list. `(void)` and `(int, int)` are parameters;
 // `(*f)` and `(^b)` group.
+// parenIsGrouping decides whether a '(' opens a parenthesized declarator or a
+// parameter list — the one genuine ambiguity in §5.7's declarator grammar.
+//
+// The answer is in the token after it, except that an attribute may stand
+// between: `void (__attribute__((noescape)) ^)(NSUInteger)` is a block
+// pointer, and a parameter list may begin with an attribute too. Skipping the
+// attribute run and asking the same question of what follows is what tells
+// them apart, and is what clang does.
 func (p *parser) parenIsGrouping(m dmode) bool {
-	switch t := p.peekTok(1); t.Kind {
+	switch t := p.peekTok(p.afterAttrs(1)); t.Kind {
 	case token.MUL, token.XOR, token.LPAREN:
 		return true
 	case token.IDENT:
 		return m != dmodeAbstract && !p.isTypeName(p.name(t))
 	}
 	return false
+}
+
+// afterAttrs is the lookahead offset of the first token past an attribute run
+// beginning at offset i. It only counts parentheses, because an attribute's
+// arguments are §8's BalancedTokenSequence and nothing here has to understand
+// them.
+func (p *parser) afterAttrs(i int) int {
+	for p.peekTok(i).Kind == token.ATTRIBUTE {
+		j := i + 1
+		depth := 0
+		for {
+			switch p.peekTok(j).Kind {
+			case token.LPAREN:
+				depth++
+			case token.RPAREN:
+				depth--
+			case token.EOF:
+				return i
+			}
+			j++
+			if depth == 0 {
+				break
+			}
+		}
+		i = j
+	}
+	return i
 }
 
 func (p *parser) parseArraySuffix(inner ast.Declarator, lo token.Pos) ast.Declarator {

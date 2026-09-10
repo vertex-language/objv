@@ -220,7 +220,7 @@ func (p *Preprocessor) include(r *reader, name string, angled bool, at Site, mod
 		// The first is why Objective-C code has no guards to write: the
 		// directive states the conclusion the guard would let a compiler
 		// infer.
-		if c.done && (c.once || (c.guard != "" && p.macros.Defined(c.guard))) {
+		if c.once || (c.done && c.guard != "" && p.macros.Defined(c.guard)) {
 			if mode == incImport {
 				c.once = true
 			}
@@ -281,11 +281,46 @@ func (p *Preprocessor) searchList(r *reader, name string, angled bool, mode incl
 	if !ok {
 		return out
 	}
+
+	// A framework may carry frameworks of its own, and a header inside one
+	// reaches them by name as though they were top-level:
+	// CoreServices.framework/Headers/CoreServices.h writes <AE/AE.h> and
+	// means CoreServices.framework/Frameworks/AE.framework. Those come
+	// first, innermost enclosing framework first, because a subframework
+	// shadows a top-level framework of the same name.
+	out = append(out, embeddedFrameworks(r, fw, rest)...)
+
 	for i := range p.cfg.Frameworks {
 		m := &p.cfg.Frameworks[i]
 		out = append(out,
 			place{m, path.Join(fw+".framework", "Headers", rest)},
 			place{m, path.Join(fw+".framework", "PrivateHeaders", rest)})
+	}
+	return out
+}
+
+// embeddedFrameworks is where a framework include looks inside the framework
+// that wrote it, innermost first.
+//
+// The including file's path names its own framework — and, when frameworks
+// are nested, every framework it is inside — so each one's Frameworks/
+// directory is a place the named framework could be. Nothing is probed here;
+// this only says where to look, and the caller's open() decides.
+func embeddedFrameworks(r *reader, fw, rest string) []place {
+	if r == nil || r.org == nil || r.org.Mount == nil {
+		return nil
+	}
+	parts := strings.Split(r.org.Path, "/")
+	var out []place
+	for i := len(parts) - 1; i >= 0; i-- {
+		if !strings.HasSuffix(parts[i], ".framework") {
+			continue
+		}
+		base := path.Join(append(append([]string{}, parts[:i+1]...),
+			"Frameworks", fw+".framework")...)
+		out = append(out,
+			place{r.org.Mount, path.Join(base, "Headers", rest)},
+			place{r.org.Mount, path.Join(base, "PrivateHeaders", rest)})
 	}
 	return out
 }
@@ -380,7 +415,16 @@ func (p *Preprocessor) readFile(c *cached, m *Mount, rel, display string, at Sit
 	for i := range toks {
 		toks[i].Origin = org
 	}
-	r := &reader{org: org, toks: toks, miValid: true}
+	r := &reader{org: org, toks: toks, miValid: true, cache: c}
+
+	// #import means "at most once", and that has to hold for a file that
+	// reaches itself while it is still being read — which Foundation does:
+	// Foundation.h imports NSLengthFormatter.h, which imports Foundation.h.
+	// Marking it on the way in is what stops the recursion; marking it on
+	// the way out never runs.
+	if mode == incImport {
+		c.once = true
+	}
 
 	// Phases 1–3 diagnostics, deferred from open(): reported here, on the
 	// first read only, through the real Origin — so they carry the include
@@ -400,7 +444,7 @@ func (p *Preprocessor) readFile(c *cached, m *Mount, rel, display string, at Sit
 	if !c.done {
 		c.done = true
 		c.guard = r.guardFound
-		c.once = r.once
+		c.once = c.once || r.once
 	}
 	if mode == incImport {
 		c.once = true

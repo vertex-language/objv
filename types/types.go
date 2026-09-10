@@ -381,6 +381,21 @@ type Enum struct {
 	Complete bool
 	Under    Kind
 	Fixed    bool
+
+	// Defined records that a brace-enclosed enumerator list was seen.
+	//
+	// It is not Complete. §5.8's fixed underlying type completes the type
+	// at the specifier — `enum E : NSInteger;` declares a type an object
+	// may be declared of — while leaving the enumeration itself still to
+	// be defined, once. NS_ENUM writes both, in that order:
+	//
+	//	typedef enum E : NSInteger E;
+	//	enum E : NSInteger { ... };
+	//
+	// so a compiler that read Complete as "already defined" would call the
+	// second line a redefinition of the first, and no Cocoa header would
+	// get past its first enumeration.
+	Defined bool
 }
 
 func (*Enum) Kind() Kind { return EnumKind }

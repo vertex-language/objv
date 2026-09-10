@@ -186,7 +186,14 @@ func (s *scanner) scanToken() {
 	//
 	// Under ScanPP it is a HASH like any other: the directive grammar
 	// lives in the preprocessor, and it needs the token.
-	if s.lineOpen && s.mode&ScanPP == 0 && (c == '#' || (c == '%' && s.peek(1) == ':')) {
+	//
+	// A #pragma is the exception, and is scanned rather than skipped.
+	// Phase 4 does not consume the pragmas it does not act on — it
+	// forwards them, deliberately, because some of them mean something to
+	// phase 7. #pragma pack is one: it changes the layout of every
+	// structure declared after it, which no earlier phase could apply.
+	if s.lineOpen && s.mode&ScanPP == 0 && (c == '#' || (c == '%' && s.peek(1) == ':')) &&
+		!s.atPragma() {
 		s.directiveLine()
 		return
 	}
@@ -210,6 +217,27 @@ func (s *scanner) scanToken() {
 	default:
 		s.scanPunct()
 	}
+}
+
+// atPragma reports whether the line-opening '#' at the cursor begins a
+// #pragma. It looks ahead over horizontal whitespace only: a directive name
+// is on the same logical line as its '#', and line splices were already
+// removed in phase 2.
+func (s *scanner) atPragma() bool {
+	i := s.off + 1
+	if s.text[s.off] == '%' {
+		i++
+	}
+	for i < len(s.text) && (s.text[i] == ' ' || s.text[i] == '\t') {
+		i++
+	}
+	const word = "pragma"
+	if i+len(word) > len(s.text) || string(s.text[i:i+len(word)]) != word {
+		return false
+	}
+	i += len(word)
+	// The word has to end here, or `#pragmatic` would be one.
+	return i >= len(s.text) || !isIdentPart(s.text[i])
 }
 
 func (s *scanner) directiveLine() {

@@ -65,6 +65,12 @@ type reader struct {
 	// conclusion outright instead of leaving it to be inferred from the
 	// file's shape, so a token before it takes nothing away.
 	once bool
+
+	// cache is the open-once entry this reader is reading, so that a
+	// #pragma once takes effect immediately rather than when the file
+	// finishes. A header that reaches itself while it is still being read
+	// has to be stopped on the way in; see readFile.
+	cache *cached
 }
 
 // Preprocessor holds one translation unit's phase-4 state.

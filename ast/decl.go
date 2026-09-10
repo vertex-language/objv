@@ -189,6 +189,17 @@ type StructType struct {
 	// it, which is what makes `struct __attribute__((packed)) s` packed
 	// everywhere s is named.
 	Attrs []*Attr
+
+	// Pack is the alignment ceiling `#pragma pack` had in force where this
+	// specifier was written, or zero where there was none.
+	//
+	// It is recorded on the node rather than looked up later because the
+	// pragma is positional: it is a property of the point in the file the
+	// struct was declared at, and nothing about the struct itself says
+	// which region it fell in. Apple's <mach/message.h> wraps three hundred
+	// lines in `#pragma pack(push, 4)`, and every message trailer in it has
+	// a size that is wrong without this.
+	Pack int64
 }
 
 // DefsSpec is `@defs ( ClassName )`.

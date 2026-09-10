@@ -632,3 +632,87 @@ func TestDeterminism(t *testing.T) {
 		t.Errorf("__COUNTER__ should count: %q", first)
 	}
 }
+
+// A keyword is a phase-7 idea.
+//
+// §6.4.2 has only identifiers here, and Foundation leans on it:
+// NSObjCRuntime.h writes `#if !defined(__unsafe_unretained)` and then
+// defines it, whose operand is an ownership qualifier by the time the parser
+// sees it and an identifier to every phase before that.
+func TestDefinedTakesAnyName(t *testing.T) {
+	wantOut(t, Config{}, `
+#if defined(__unsafe_unretained)
+no
+#else
+yes
+#endif`, "yes")
+
+	// The operand is a macro name and not a type: `defined(int)` is false
+	// until something #defines int, and true afterwards.
+	wantOut(t, Config{}, `
+#define __unsafe_unretained
+#if defined(__unsafe_unretained) && !defined(int)
+yes
+#endif
+#define int 1
+#if defined(int)
+also
+#endif`, "yes also")
+
+	// #ifdef and the guard-recognition path take a keyword too.
+	wantOut(t, Config{}, `
+#ifndef __weak
+#define __weak
+#endif
+#ifdef __weak
+ok
+#endif`, "ok")
+}
+
+// #import means "at most once", and that has to hold for a file that reaches
+// itself while it is still being read — which Foundation does: Foundation.h
+// imports NSLengthFormatter.h, which imports Foundation.h. Marking the file
+// on the way in is what stops the recursion; marking it on the way out never
+// runs.
+func TestImportCycle(t *testing.T) {
+	fsys := fstest.MapFS{
+		"a.h": &fstest.MapFile{Data: []byte("A\n#import <b.h>\nA2\n")},
+		"b.h": &fstest.MapFile{Data: []byte("B\n#import <a.h>\nB2\n")},
+	}
+	cfg := Config{Search: []Mount{{Name: "inc", FS: fsys}}}
+	wantOut(t, cfg, "#import <a.h>", "A B B2 A2")
+
+	// #pragma once is the same promise written a different way, and has to
+	// take effect the moment it is seen rather than when the file ends.
+	fsys2 := fstest.MapFS{
+		"c.h": &fstest.MapFile{Data: []byte("#pragma once\nC\n#include <d.h>\nC2\n")},
+		"d.h": &fstest.MapFile{Data: []byte("D\n#include <c.h>\nD2\n")},
+	}
+	cfg2 := Config{Search: []Mount{{Name: "inc", FS: fsys2}}}
+	wantOut(t, cfg2, "#include <c.h>", "C D D2 C2")
+}
+
+// A framework may carry frameworks of its own, and a header inside one
+// reaches them by name as though they were top-level: CoreServices.h writes
+// <AE/AE.h> and means CoreServices.framework/Frameworks/AE.framework.
+func TestEmbeddedFrameworks(t *testing.T) {
+	fsys := fstest.MapFS{
+		"Outer.framework/Headers/Outer.h": &fstest.MapFile{
+			Data: []byte("outer\n#import <Inner/Inner.h>\n")},
+		"Outer.framework/Frameworks/Inner.framework/Headers/Inner.h": &fstest.MapFile{
+			Data: []byte("inner\n")},
+	}
+	cfg := Config{Frameworks: []Mount{{Name: "F", FS: fsys, System: true}}}
+	wantOut(t, cfg, "#import <Outer/Outer.h>", "outer inner")
+
+	// A subframework shadows a top-level framework of the same name.
+	top := fstest.MapFS{
+		"Inner.framework/Headers/Inner.h": &fstest.MapFile{Data: []byte("toplevel\n")},
+	}
+	cfg2 := Config{Frameworks: []Mount{
+		{Name: "F", FS: fsys, System: true},
+		{Name: "G", FS: top, System: true},
+	}}
+	wantOut(t, cfg2, "#import <Outer/Outer.h>", "outer inner")
+	wantOut(t, cfg2, "#import <Inner/Inner.h>", "toplevel")
+}

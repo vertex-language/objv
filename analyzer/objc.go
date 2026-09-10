@@ -242,15 +242,29 @@ func (c *checker) addMethod(k *types.Class, p *types.Protocol, sig *types.Method
 	} else {
 		list = &p.Methods
 	}
-	for _, prev := range *list {
-		if prev.Sel == sig.Sel && prev.Class == sig.Class {
-			// A category redeclaring a method the class already has is a
-			// duplicate the runtime resolves by load order, which is to say
-			// unpredictably.
-			c.report(at, "duplicate declaration of method '"+methodName(sig)+"'")
-			c.note(at, "previously declared in '"+prev.Owner+"'")
+	for i, prev := range *list {
+		if prev.Sel != sig.Sel || prev.Class != sig.Class {
+			continue
+		}
+		// An accessor a @property implied is not a declaration the program
+		// made, so declaring it outright is not a redeclaration — it is the
+		// same method, said in the second of the two ways §4.8 admits.
+		// NSTimeZone declares `abbreviationDictionary` both ways in one
+		// @interface, and so do a dozen more Foundation classes.
+		if prev.FromProperty && !sig.FromProperty {
+			(*list)[i] = sig
+			c.selector(sig.Sel)
 			return
 		}
+		if sig.FromProperty {
+			return
+		}
+		// A category redeclaring a method the class already has is a
+		// duplicate the runtime resolves by load order, which is to say
+		// unpredictably.
+		c.report(at, "duplicate declaration of method '"+methodName(sig)+"'")
+		c.note(at, "previously declared in '"+prev.Owner+"'")
+		return
 	}
 	*list = append(*list, sig)
 	c.selector(sig.Sel)
@@ -351,7 +365,12 @@ func (c *checker) addIvars(k *types.Class, l *ast.IvarList, def types.Visibility
 					c.report(fd, "duplicate instance variable '"+iv.Name+"' in "+where)
 					continue
 				}
-				if !types.Complete(t) {
+				// A flexible array member is the exception, as it is in a
+				// struct: the last instance variable may be `T name[]`,
+				// whose size is whatever was allocated past the object.
+				// NSDecimal's _mantissa is one, and objc4 lays it out the
+				// same way.
+				if !types.Complete(t) && !flexibleArray(t, item, fd) {
 					c.report(fd, "instance variable has incomplete type "+t.String())
 				}
 				c.info.Types[fd] = iv.Type
@@ -394,7 +413,7 @@ func (c *checker) addProperties(k *types.Class, p *types.Protocol, d *ast.Proper
 
 		switch {
 		case k != nil:
-			if prev := findOwnProperty(k, name); prev != nil {
+			if prev := findOwnProperty(k, name, attrs&types.PropClass != 0); prev != nil {
 				c.report(decl, "duplicate property '"+name+"' in class '"+k.Name+"'")
 				continue
 			}
@@ -407,9 +426,25 @@ func (c *checker) addProperties(k *types.Class, p *types.Protocol, d *ast.Proper
 	}
 }
 
-func findOwnProperty(k *types.Class, name string) *types.Property {
+// flexibleArray reports whether a member's incomplete type is the admitted
+// one: an array with no bound, in the last declarator of the last member.
+func flexibleArray(t types.Type, item *ast.FieldDecl, fd *ast.FieldDeclarator) bool {
+	a, ok := types.Unqualify(t).(*types.Array)
+	if !ok || a.Form != types.IncompleteArray {
+		return false
+	}
+	return len(item.List) > 0 && item.List[len(item.List)-1] == fd
+}
+
+// findOwnProperty finds a property the class declares itself.
+//
+// A class property and an instance property may share a name, because they
+// are reached through different selectors on different objects: NSDate has
+// both `description` and a class `timeIntervalSinceReferenceDate`, and
+// NSThread declares `isMainThread` twice for exactly this reason.
+func findOwnProperty(k *types.Class, name string, class bool) *types.Property {
 	for _, p := range k.Properties {
-		if p.Name == name {
+		if p.Name == name && p.Has(types.PropClass) == class {
 			return p
 		}
 	}
@@ -424,7 +459,8 @@ func (c *checker) declareAccessors(k *types.Class, p *types.Property, optional b
 	class := p.Has(types.PropClass)
 	if k.Lookup(p.Getter, class) == nil {
 		k.Methods = append(k.Methods, &types.Method{
-			Sel: p.Getter, Class: class, Ret: p.Type, Optional: optional, Owner: p.Owner,
+			Sel: p.Getter, Class: class, Ret: p.Type, Optional: optional,
+			Owner: p.Owner, FromProperty: true,
 		})
 	}
 	if !p.Has(types.PropReadonly) && k.Lookup(p.Setter, class) == nil {
@@ -432,6 +468,7 @@ func (c *checker) declareAccessors(k *types.Class, p *types.Property, optional b
 			Sel: p.Setter, Class: class, Ret: types.Typ(types.Void),
 			Params:   []types.Param{{Name: p.Name, Type: p.Type}},
 			Optional: optional, Owner: p.Owner,
+			FromProperty: true,
 		})
 	}
 }

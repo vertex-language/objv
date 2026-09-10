@@ -187,6 +187,13 @@ type Method struct {
 	// protocol may find nothing at run time.
 	Optional bool
 
+	// FromProperty marks an accessor a @property implied rather than one
+	// the program wrote. §4.8 says a property declares its getter and its
+	// setter, and a class may also declare either outright — Apple does it
+	// to give an accessor an availability the property does not have — so
+	// the two are the same method declared twice and not a redeclaration.
+	FromProperty bool
+
 	// Designated is __attribute__((objc_designated_initializer)), which
 	// decides which initializers a subclass must override and which ones
 	// may only chain. Unavailable is __attribute__((unavailable)), which is

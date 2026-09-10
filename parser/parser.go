@@ -148,6 +148,16 @@ type parser struct {
 	// is where §5.6's underscore-free nullability spellings mean the
 	// qualifier rather than an identifier.
 	inMethodType bool
+
+	// pack is `#pragma pack`'s alignment ceiling here, and packStack is
+	// what push and pop move it through. Zero is "no ceiling".
+	//
+	// The pragma is in the parser and not in phase 4 because it is not a
+	// phase-4 idea: it changes what a later declaration *means*, not what
+	// tokens come out, which is why the preprocessor passes it through
+	// rather than acting on it.
+	pack      int64
+	packStack []int64
 }
 
 // ---- names ----
@@ -208,6 +218,12 @@ func (p *parser) declarePredeclared() {
 		p.declare(n, nameTypedef)
 	}
 	p.declare("Protocol", nameClass)
+
+	// __builtin_va_list is the compiler's, not a header's: Apple's
+	// <sys/_types/_va_list.h> typedefs va_list from it and declares it
+	// nowhere, because gcc and clang both provide it as a built-in type
+	// name. A compiler that did not would fail on the first <stdio.h>.
+	p.declare("__builtin_va_list", nameTypedef)
 }
 
 func (p *parser) isTypeName(name string) bool {

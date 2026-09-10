@@ -276,7 +276,7 @@ func (r *reader) noteGuardIf(p *Preprocessor, line []Token) {
 	}
 	if len(line) >= 2 && line[0].Kind == token.NOT && line[1].Is("defined") {
 		for _, t := range line[2:] {
-			if t.Kind == token.IDENT {
+			if t.IsName() {
 				c.guard = t.Text()
 				return
 			}
@@ -333,6 +333,12 @@ func (p *Preprocessor) pragma(r *reader, line []Token, at Site) []Token {
 	if len(line) > 0 && line[0].Is("once") {
 		if r != nil {
 			r.once = true
+			// Immediately, not when the file finishes: the pragma has to
+			// stop a re-entrant include of this same file, which happens
+			// while this run is still on the stack.
+			if r.cache != nil {
+				r.cache.once = true
+			}
 		}
 		return nil
 	}

@@ -93,7 +93,12 @@ func (p *Preprocessor) resolveDefined(line []Token, at Site) []Token {
 		if paren {
 			j++
 		}
-		if j >= len(line) || line[j].Kind != token.IDENT {
+		// Any name, not only an IDENT. A keyword is a phase-7 idea:
+		// §6.4.2 has only identifiers here, and Foundation leans on it —
+		// NSObjCRuntime.h writes `#if !defined(__unsafe_unretained)`,
+		// whose operand is an ownership qualifier by the time the parser
+		// sees it and an identifier to every phase before that.
+		if j >= len(line) || !line[j].IsName() {
 			p.errorf(t.Site(), "operator \"defined\" requires an identifier")
 			out = append(out, p.number(t, 0))
 			i = len(line)

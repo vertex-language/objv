@@ -72,9 +72,9 @@ func (c *checker) evalInt(e ast.Expr) (int64, bool) {
 		case token.ADD:
 			return v, true
 		case token.SUB:
-			return -v, true
+			return c.narrow(e, -v), true
 		case token.TILDE:
-			return ^v, true
+			return c.narrow(e, ^v), true
 		case token.NOT:
 			return b2i(v == 0), true
 		}
@@ -107,11 +107,11 @@ func (c *checker) evalInt(e ast.Expr) (int64, bool) {
 		}
 		switch e.Op {
 		case token.ADD:
-			return x + y, true
+			return c.narrow(e, x+y), true
 		case token.SUB:
-			return x - y, true
+			return c.narrow(e, x-y), true
 		case token.MUL:
-			return x * y, true
+			return c.narrow(e, x*y), true
 		case token.QUO, token.REM:
 			if y == 0 {
 				c.report(e, "division by zero in constant expression")
@@ -122,7 +122,7 @@ func (c *checker) evalInt(e ast.Expr) (int64, bool) {
 			}
 			return x % y, true
 		case token.SHL:
-			return x << (uint64(y) & 63), true
+			return c.narrow(e, x<<(uint64(y)&63)), true
 		case token.SHR:
 			return x >> (uint64(y) & 63), true
 		case token.AND:
@@ -328,4 +328,33 @@ func b2i(b bool) int64 {
 		return 1
 	}
 	return 0
+}
+
+// narrow reduces a folded value to the width and signedness of the type the
+// expression has (§6.3.1.3).
+//
+// The folder works in int64 throughout, which is right for every value C's
+// constant expressions can produce and wrong about what a *narrower* type
+// does with one. `~0u` is an unsigned int and its value is UINT_MAX, not -1,
+// and an enumeration declared over unsigned int rejects the second —
+// <mach/mach_types.h> ends every one of its enumerations with `= ~0u`.
+//
+// Only the operators that can overflow go through here. A comparison yields
+// 0 or 1 whatever its operands were, and a bitwise and, or or xor of two
+// already-narrowed values is already narrow.
+func (c *checker) narrow(e ast.Expr, v int64) int64 {
+	t := types.Unqualify(c.quietType(e))
+	if !types.IsInteger(t) {
+		return v
+	}
+	bits, signed := c.model.IntBits(t)
+	if bits <= 0 || bits >= 64 {
+		return v
+	}
+	mask := int64(1)<<uint(bits) - 1
+	v &= mask
+	if signed && v&(int64(1)<<uint(bits-1)) != 0 {
+		v |= ^mask
+	}
+	return v
 }

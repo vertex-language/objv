@@ -219,11 +219,34 @@ func (c *checker) arc() bool { return c.mode&ARC != 0 }
 // whole of that conversation.
 
 func (c *checker) Typedef(id *ast.Ident) types.Type {
-	if s := c.lookup(c.name(id)); s != nil && s.kind == symTypedef {
+	name := c.name(id)
+	if s := c.lookup(name); s != nil && s.kind == symTypedef {
 		return s.typ
 	}
-	c.report(id, "unknown type name '"+c.name(id)+"'")
+	if t, ok := builtinTypeName(name); ok {
+		return t
+	}
+	c.report(id, "unknown type name '"+name+"'")
 	return types.Typ(types.Int)
+}
+
+// builtinTypeName is a type the compiler provides and no header declares.
+//
+// There is one of them, and it is the reason: Apple's <sys/_types/_va_list.h>
+// writes `typedef __builtin_va_list va_list;` and declares __builtin_va_list
+// nowhere, because gcc and clang both supply it. A compiler that did not
+// would fail on the first header that reaches <stdarg.h>, which on Darwin is
+// approximately all of them.
+//
+// It is void * here, which is what objv's own <stdarg.h> makes va_list and
+// what the va_* builtins will operate on. A register-passing ABI wants a
+// structure instead; that change belongs here, once, when lower implements
+// the varargs operations.
+func builtinTypeName(name string) (types.Type, bool) {
+	if name == "__builtin_va_list" {
+		return &types.Pointer{Elem: types.Typ(types.Void)}, true
+	}
+	return nil, false
 }
 
 func (c *checker) Report(n ast.Node, msg string) { c.report(n, msg) }

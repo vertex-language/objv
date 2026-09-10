@@ -244,7 +244,7 @@ scanner -> preprocessor -> parser -> analyzer -> lower -> objv
 | `analyzer/` · `types/` | Symbol tables, class hierarchies, method signatures, protocols, ARC semantics |
 | `lower/` | AST to VIR translation; lowering message sends, block captures, and `@autoreleasepool` |
 | `runtime/` | Objective-C runtime ABI structures and runtime symbol emission |
-| `sysroot/` | Framework, SDK, and platform include/library discovery |
+| `sysroot/` | Framework, SDK, and platform include/library discovery; deployment target and platform predefines |
 | `internal/cli/` · `cmd/objv/` | CLI command parsing, flag binding, and terminal dispatch |
 | `.` | Core compiler coordinator: target resolution, pipeline management, backend orchestration |
 
