@@ -243,8 +243,17 @@ func (c *checker) Typedef(id *ast.Ident) types.Type {
 // structure instead; that change belongs here, once, when lower implements
 // the varargs operations.
 func builtinTypeName(name string) (types.Type, bool) {
-	if name == "__builtin_va_list" {
+	switch name {
+	case "__builtin_va_list":
 		return &types.Pointer{Elem: types.Typ(types.Void)}, true
+
+	// clang predefines these two as typedefs of __int128 and unsigned
+	// __int128, and Apple's <mach/arm/_structs.h> declares the NEON
+	// register file with them.
+	case "__int128_t":
+		return types.Typ(types.Int128), true
+	case "__uint128_t":
+		return types.Typ(types.UInt128), true
 	}
 	return nil, false
 }

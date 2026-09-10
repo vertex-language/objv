@@ -73,10 +73,11 @@ func (s *scanner) scanUCN() {
 	}
 }
 
-// scanNumber consumes one numeric run — digits, letters, '.', and
-// exponent signs — then validates it as a whole: one diagnostic per
-// run, never two. '_' is not consumed: C11 has no digit separators,
-// so 1_024 is INT_LIT 1 then IDENT _024.
+// scanNumber consumes one numeric run — §2.3's PPNumber: digits,
+// identifier characters, '.', and exponent signs — then classifies it
+// as a whole. Structural mistakes report once per run, never twice;
+// a suffix that is not a suffix is not one of them, for the reason
+// classify gives.
 func (s *scanner) scanNumber() {
 	start := s.off
 	hex := s.text[s.off] == '0' && (s.peek(1) == 'x' || s.peek(1) == 'X')
@@ -87,7 +88,14 @@ loop:
 		switch {
 		case isDigit(c) || c == '.':
 			s.off++
-		case isLetter(c):
+		case s.identStart(c):
+			// §2.3's PPNumber admits an IdentifierNondigit, which is any
+			// identifier character that is not a digit — the underscore
+			// included. It is not a curiosity: Apple's CF_AVAILABLE(10_0,
+			// 2_0) pastes its argument onto __MAC_ and needs 10_0 to be one
+			// token, and a scanner that stopped at the underscore produces
+			// __MAC_10 followed by a stray _0, which then fails to expand
+			// as the macro it was supposed to name.
 			s.off++
 			sign := s.peek(0) == '+' || s.peek(0) == '-'
 			if sign && ((!hex && (c == 'e' || c == 'E')) || (hex && (c == 'p' || c == 'P'))) {
@@ -204,15 +212,25 @@ func (s *scanner) classify(start int, hex, bin bool) token.Kind {
 		}
 	}
 
-	suffix := t[i:]
+	// The suffix is not checked here.
+	//
+	// A run that fails to be a constant is still a legal preprocessing
+	// token (§2.3's PPNumber), and this scanner runs over token sequences
+	// no phase takes a value from — an attribute's arguments are §8's
+	// BalancedTokenSequence, and Apple writes a version number in one:
+	//
+	//	__attribute__((availability(macosx,introduced=10_2)))
+	//
+	// where `10_2` is a pp-number and not an integer constant, and saying
+	// so would be four hundred diagnostics about code that means what it
+	// says. The same reasoning already governs the two-dot case above.
+	//
+	// `int x = 1_024;` is still an error. It is reported where the value is
+	// decoded — analyzer.DecodeIntConst — which is the phase that needs the
+	// run to be a constant and the only one entitled to complain that it is
+	// not.
 	if isFloat {
-		if !(len(suffix) == 0 || len(suffix) == 1 && strings.IndexByte("fFlL", suffix[0]) >= 0) {
-			fail(fmt.Sprintf("invalid suffix %q on floating constant", suffix))
-		}
 		return token.FLOAT_LIT
-	}
-	if !validIntSuffix(suffix) {
-		fail(fmt.Sprintf("invalid suffix %q on integer constant", suffix))
 	}
 	return token.INT_LIT
 }

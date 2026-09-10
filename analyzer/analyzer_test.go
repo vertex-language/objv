@@ -355,3 +355,30 @@ func TestOneDiagnosticPerMistake(t *testing.T) {
 		t.Errorf("%d diagnostics for one misspelling, want 1", n)
 	}
 }
+
+// A suffix that is not a suffix is reported where the value is decoded.
+//
+// §2.3's PPNumber runs through identifier characters, so `1_024` and `10_2`
+// are both legal preprocessing tokens; only one of them stands where a value
+// is wanted. Apple writes the other inside an availability attribute — whose
+// arguments are §8's BalancedTokenSequence and are never decoded — several
+// hundred times per compilation, so a scanner that reported it would bury
+// every build under it.
+func TestIntegerSuffixDiagnostic(t *testing.T) {
+	for _, c := range []struct {
+		text string
+		bad  bool
+	}{
+		{"1", false}, {"10u", false}, {"5UL", false}, {"2llu", false},
+		{"0x1Fu", false}, {"0b1011", false},
+		{"1_024", true}, {"4lul", true}, {"5lL", true}, {"10_2", true},
+	} {
+		var msgs []string
+		analyzer.DecodeIntConst(c.text, types.LP64(), func(m string) {
+			msgs = append(msgs, m)
+		})
+		if got := len(msgs) > 0; got != c.bad {
+			t.Errorf("%q: %d diagnostics %v, want bad=%v", c.text, len(msgs), msgs, c.bad)
+		}
+	}
+}

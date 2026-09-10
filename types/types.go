@@ -43,6 +43,17 @@ const (
 	LongLong
 	ULongLong
 
+	// Int128 and UInt128 are gcc's __int128, which clang carries on every
+	// 64-bit target and Apple's headers use: <mach/arm/_structs.h>
+	// declares the NEON register file as __uint128_t __v[32], and nothing
+	// narrower describes a 128-bit vector register.
+	Int128
+	UInt128
+
+	// Float16 is IEEE binary16, which <math.h> declares its half-precision
+	// entry points in terms of.
+	Float16
+
 	Float
 	Double
 	LongDouble
@@ -427,7 +438,7 @@ func (e *Enum) ConstType() Type {
 func IsInteger(t Type) bool {
 	switch Unqualify(t).Kind() {
 	case Bool, Char, SChar, UChar, Short, UShort, Int, UInt,
-		Long, ULong, LongLong, ULongLong, EnumKind:
+		Long, ULong, LongLong, ULongLong, Int128, UInt128, EnumKind:
 		return true
 	}
 	return false
@@ -442,7 +453,7 @@ func IsSigned(t Type) bool {
 		return IsSigned(Typ(e.Underlying()))
 	}
 	switch u.Kind() {
-	case SChar, Short, Int, Long, LongLong:
+	case SChar, Short, Int, Long, LongLong, Int128:
 		return true
 	}
 	return false
@@ -478,6 +489,12 @@ func (b *Basic) String() string {
 		return "long long"
 	case ULongLong:
 		return "unsigned long long"
+	case Int128:
+		return "__int128"
+	case UInt128:
+		return "unsigned __int128"
+	case Float16:
+		return "_Float16"
 	case Float:
 		return "float"
 	case Double:

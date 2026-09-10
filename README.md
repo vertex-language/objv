@@ -246,7 +246,7 @@ scanner -> preprocessor -> parser -> analyzer -> lower -> objv
 | `runtime/` | Objective-C runtime ABI structures and runtime symbol emission |
 | `sysroot/` | Framework, SDK, and platform include/library discovery; deployment target and platform predefines |
 | `internal/cli/` · `cmd/objv/` | CLI command parsing, flag binding, and terminal dispatch |
-| `.` | Core compiler coordinator: target resolution, pipeline management, backend orchestration |
+| `.` | Core compiler coordinator: target resolution, predefines, pipeline management, backend orchestration |
 
 ---
 

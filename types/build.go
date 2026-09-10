@@ -268,6 +268,7 @@ func kwString(kws []token.Kind) string {
 var kwOrder = map[string]int{
 	"unsigned": 0, "signed": 1, "long": 2, "short": 3, "char": 4,
 	"int": 5, "float": 6, "double": 7, "void": 8, "_Bool": 9, "_Complex": 10,
+	"__int128": 11, "_Float16": 12,
 }
 
 var multisets = map[string]Kind{
@@ -287,7 +288,12 @@ var multisets = map[string]Kind{
 	"long long int": LongLong, "signed long long int": LongLong,
 	"unsigned long long": ULongLong, "unsigned long long int": ULongLong,
 
-	"float": Float, "double": Double, "long double": LongDouble,
+	// gcc's __int128, which clang carries on every 64-bit target. It takes
+	// signed and unsigned like any other integer type and nothing else.
+	"__int128": Int128, "signed __int128": Int128, "unsigned __int128": UInt128,
+
+	"_Float16": Float16,
+	"float":    Float, "double": Double, "long double": LongDouble,
 	"float _Complex": ComplexFloat, "double _Complex": ComplexDouble,
 	"long double _Complex": ComplexLongDouble,
 }

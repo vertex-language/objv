@@ -158,6 +158,11 @@ type parser struct {
 	// rather than acting on it.
 	pack      int64
 	packStack []int64
+
+	// classScopes are the depths at which an @interface, @implementation or
+	// @protocol opened a scope. Such a scope exists for the class's type
+	// parameters and for nothing else; see declareDeclarator.
+	classScopes []int
 }
 
 // ---- names ----
@@ -184,6 +189,28 @@ func (p *parser) declare(name string, k nameKind) {
 	if name != "" {
 		p.scopes[len(p.scopes)-1][name] = k
 	}
+}
+
+// pushClassScope opens the scope an @interface, @implementation or @protocol
+// reads its type parameters and members in.
+func (p *parser) pushClassScope() {
+	p.pushScope()
+	p.classScopes = append(p.classScopes, len(p.scopes))
+}
+
+func (p *parser) popClassScope() {
+	if n := len(p.classScopes); n > 0 {
+		p.classScopes = p.classScopes[:n-1]
+	}
+	p.popScope()
+}
+
+// inClassScope reports whether the innermost scope is one a class opened —
+// which is where a C declaration is a file-scope declaration standing in a
+// class's braces, and not a local one.
+func (p *parser) inClassScope() bool {
+	n := len(p.classScopes)
+	return n > 0 && p.classScopes[n-1] == len(p.scopes)
 }
 
 // declareGlobal enters a name at file scope from wherever the parser is.
@@ -224,6 +251,11 @@ func (p *parser) declarePredeclared() {
 	// nowhere, because gcc and clang both provide it as a built-in type
 	// name. A compiler that did not would fail on the first <stdio.h>.
 	p.declare("__builtin_va_list", nameTypedef)
+
+	// clang's two 128-bit typedefs, which it predefines and no header
+	// declares. Apple's <mach/arm/_structs.h> uses them.
+	p.declare("__int128_t", nameTypedef)
+	p.declare("__uint128_t", nameTypedef)
 }
 
 func (p *parser) isTypeName(name string) bool {
@@ -496,7 +528,8 @@ func (p *parser) isTypeSpecStart(t token.Token) bool {
 	switch t.Kind {
 	case token.VOID, token.CHAR, token.SHORT, token.INT, token.LONG,
 		token.FLOAT, token.DOUBLE, token.SIGNED, token.UNSIGNED,
-		token.BOOL, token.COMPLEX, token.AUTO_TYPE, token.STRUCT,
+		token.BOOL, token.COMPLEX, token.AUTO_TYPE, token.INT128,
+		token.FLOAT16, token.STRUCT,
 		token.UNION, token.ENUM, token.ATOMIC, token.CONST, token.RESTRICT,
 		token.VOLATILE, token.TYPEOF, token.ATTRIBUTE,
 		// §5.6's Objective-C qualifiers open one wherever const does.

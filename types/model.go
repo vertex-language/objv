@@ -95,6 +95,13 @@ func (m Model) basicSize(k Kind) (int64, bool) {
 		return m.SizeLong, true
 	case LongLong, ULongLong:
 		return m.SizeLongLong, true
+	// __int128 and _Float16 are the same size everywhere they exist; there
+	// is no target model that gives them another, so they are stated rather
+	// than carried as fields nothing would ever set differently.
+	case Int128, UInt128:
+		return 16, true
+	case Float16:
+		return 2, true
 	case Float:
 		return m.SizeFloat, true
 	case Double:

@@ -337,6 +337,15 @@ func basicCode(k types.Kind) string {
 		return "q"
 	case types.ULongLong:
 		return "Q"
+	case types.Int128:
+		return "t"
+	case types.UInt128:
+		return "T"
+	case types.Float16:
+		// clang encodes _Float16 as nothing at all, which was read off a
+		// compiled @encode(_Float16). An empty encoding is what the
+		// runtime gets, and there is no other answer to give it.
+		return ""
 	case types.Float:
 		return "f"
 	case types.Double:

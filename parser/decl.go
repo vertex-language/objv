@@ -347,7 +347,8 @@ func (p *parser) parseDeclSpecs(sq bool) ast.DeclSpecs {
 
 		case token.VOID, token.CHAR, token.SHORT, token.INT, token.LONG,
 			token.FLOAT, token.DOUBLE, token.SIGNED, token.UNSIGNED,
-			token.BOOL, token.COMPLEX, token.IMAGINARY, token.AUTO_TYPE:
+			token.BOOL, token.COMPLEX, token.IMAGINARY, token.AUTO_TYPE,
+			token.INT128, token.FLOAT16:
 			sawType = true
 			specs = append(specs, p.keywordSpec())
 			continue
@@ -1117,6 +1118,23 @@ func (p *parser) parseQualList() ast.DeclSpecs {
 			out = append(out, p.keywordSpec())
 		case token.PTRAUTH:
 			out = append(out, p.parsePtrauth())
+		case token.ATTRIBUTE:
+			// §5.7 puts an AttributeSpecifierList after a pointer's
+			// qualifiers, and CoreFoundation's headers use it:
+			//
+			//	SecKeyRef * __nonnull CF_RETURNS_RETAINED key
+			//
+			// where CF_RETURNS_RETAINED is __attribute__((cf_returns_retained)).
+			// It belongs to the pointer, beside the qualifiers it stands
+			// among.
+			attrs := p.parseAttrSpecList()
+			if len(attrs) == 0 {
+				return out
+			}
+			out = append(out, &ast.AttrSpec{
+				Span:  ast.Span{Lo: attrs[0].Pos(), Hi: attrs[len(attrs)-1].End()},
+				Attrs: attrs,
+			})
 		case token.IDENT:
 			if p.inMethodType {
 				if k, ok := nullabilityWord(p.text()); ok {
@@ -1415,6 +1433,20 @@ func (p *parser) parseInitItem() *ast.InitItem {
 
 // ---- name bookkeeping ----
 
+// declareDeclarator enters a declarator's name in the scope it belongs to.
+//
+// A C declaration written inside an @interface body belongs to *file* scope.
+// §4 puts nothing but methods, properties and instance variables in a class's
+// own namespace, and Foundation relies on it:
+//
+//	@interface NSString (Transform)
+//	typedef NSString *NSStringTransform;
+//	- (id)stringByApplyingTransform:(NSStringTransform)t;
+//	@end
+//
+// with the typedef used again in a later category. The scope an @interface
+// opens exists for its type parameters, and a typedef that fell into it would
+// leave with the @end.
 func (p *parser) declareDeclarator(d ast.Declarator, isTypedef bool) {
 	id := declNameOf(d)
 	if id == nil {
@@ -1423,6 +1455,10 @@ func (p *parser) declareDeclarator(d ast.Declarator, isTypedef bool) {
 	k := nameOrdinary
 	if isTypedef {
 		k = nameTypedef
+	}
+	if p.inClassScope() {
+		p.declareGlobal(id.Name(p.f), k)
+		return
 	}
 	p.declare(id.Name(p.f), k)
 }

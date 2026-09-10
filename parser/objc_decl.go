@@ -43,8 +43,8 @@ func (p *parser) parseInterface(lo token.Pos, attrs []*ast.Attr) ast.Decl {
 	// Type parameters and the ivars and members after them are read in a
 	// scope of their own, so that `T` names a type inside the class and
 	// nothing outside it.
-	p.pushScope()
-	defer p.popScope()
+	p.pushClassScope()
+	defer p.popClassScope()
 
 	var typeParams *ast.TypeParamList
 	if p.at(token.LSS) && p.angleIsTypeParamList() {
@@ -124,8 +124,8 @@ func (p *parser) parseImplementation(lo token.Pos, attrs []*ast.Attr) ast.Decl {
 		return &ast.BadDecl{Span: p.span(lo)}
 	}
 	p.declareGlobal(name.Name(p.f), nameClass)
-	p.pushScope()
-	defer p.popScope()
+	p.pushClassScope()
+	defer p.popClassScope()
 	p.declareClassParams(name)
 
 	if p.at(token.LPAREN) {
@@ -190,9 +190,9 @@ func (p *parser) parseProtocol(lo token.Pos, attrs []*ast.Attr) ast.Decl {
 	if p.at(token.LSS) {
 		d.Protocols = p.parseProtocolRefList()
 	}
-	p.pushScope()
+	p.pushClassScope()
 	d.Members = p.parseMembers(false)
-	p.popScope()
+	p.popClassScope()
 	d.EndKeyword = p.expectEnd()
 	d.Span = p.span(lo)
 	return d

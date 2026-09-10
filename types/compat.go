@@ -14,7 +14,7 @@ package types
 // predicate that admitted them would let a later phase believe it could.
 func IsFloat(t Type) bool {
 	switch Unqualify(t).Kind() {
-	case Float, Double, LongDouble:
+	case Float16, Float, Double, LongDouble:
 		return true
 	}
 	return false
@@ -201,6 +201,8 @@ func UnsignedOf(t Type) Type {
 		return Typ(ULong)
 	case LongLong:
 		return Typ(ULongLong)
+	case Int128:
+		return Typ(UInt128)
 	}
 	return t
 }

@@ -159,7 +159,7 @@ const (
 	COVARIANT         // __covariant
 	CONTRAVARIANT     // __contravariant
 	NONNULL           // _Nonnull, __nonnull
-	NULLABLE          // _Nullable, __nullable
+	NULLABLE          // _Nullable, __nullable, _Nullable_result
 	NULL_UNSPECIFIED  // _Null_unspecified, __null_unspecified
 	BUILTIN_AVAILABLE // __builtin_available
 	PTRAUTH           // __ptrauth
@@ -173,6 +173,15 @@ const (
 	TYPEOF    // typeof, __typeof, __typeof__
 	AUTO_TYPE // __auto_type
 	EXTENSION // __extension__
+
+	// Two extension *types*, which the C substrate carries because the
+	// platform's headers declare things in terms of them and no conforming
+	// spelling exists for either. clang provides both on every 64-bit
+	// target: <mach/arm/_structs.h> declares the NEON register file as
+	// __uint128_t __v[32], and <math.h> declares half-precision entry
+	// points in terms of _Float16.
+	INT128  // __int128
+	FLOAT16 // _Float16
 	keyword_end
 
 	// The @-directives of §2.5. Each is one token: the @ punctuator
@@ -346,6 +355,8 @@ var names = [...]string{
 	TYPEOF:    "typeof",
 	AUTO_TYPE: "__auto_type",
 	EXTENSION: "__extension__",
+	INT128:    "__int128",
+	FLOAT16:   "_Float16",
 
 	AT_INTERFACE:           "@interface",
 	AT_IMPLEMENTATION:      "@implementation",
@@ -444,8 +455,15 @@ var aliases = map[string]Kind{
 	// are in the Cocoa headers, since NS_ASSUME_NONNULL_BEGIN and the
 	// audited-region macros expand to whichever the SDK was written
 	// against.
-	"__nonnull":          NONNULL,
-	"__nullable":         NULLABLE,
+	"__nonnull":  NONNULL,
+	"__nullable": NULLABLE,
+
+	// clang's newer spelling, which means _Nullable and additionally tells
+	// a Swift importer that the null case is an error result rather than an
+	// ordinary value. That distinction is Swift's; to Objective-C the type
+	// is nullable, which is what this resolves to. Foundation writes it on
+	// every completion handler that can fail.
+	"_Nullable_result":   NULLABLE,
 	"__null_unspecified": NULL_UNSPECIFIED,
 
 	// gcc's double-underscore spellings of the C keywords. They exist so

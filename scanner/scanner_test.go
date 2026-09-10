@@ -346,8 +346,11 @@ func TestNumbers(t *testing.T) {
 		{"1ul", token.INT_LIT, 0},
 		{"2llu", token.INT_LIT, 0},
 		{"3ULL", token.INT_LIT, 0},
-		{"4lul", token.INT_LIT, 1},
-		{"5lL", token.INT_LIT, 1},
+		// A suffix that is not a suffix is a value error and is reported
+		// where the value is decoded, not here: the run is still one legal
+		// preprocessing token. See classify.
+		{"4lul", token.INT_LIT, 0},
+		{"5lL", token.INT_LIT, 0},
 		{"10.12.1", token.FLOAT_LIT, 0}, // a version tuple
 	}
 	for _, c := range cases {
@@ -372,11 +375,23 @@ func TestLiteralsStayUndecoded(t *testing.T) {
 	}
 }
 
+// §2.3's PPNumber runs through identifier characters, so `1_024` is one
+// preprocessing token — and then not a valid integer constant, which is the
+// separate question classify answers. C11 has no digit separator, so the
+// diagnostic names the suffix, exactly as clang's does.
+//
+// One token and not two is what matters here. Apple's CF_AVAILABLE(10_0, 2_0)
+// pastes its argument onto __MAC_, and split into `10` and `_0` it produces
+// __MAC_10 and a stray _0 rather than the macro name it meant.
 func TestDigitSeparatorIsNotC11(t *testing.T) {
-	diags := wantKinds(t, "1_024", token.INT_LIT, token.IDENT)
-	if errCount(diags) != 0 {
-		t.Errorf("unexpected diagnostics: %v", diags)
+	// One token, and no diagnostic here: `1_024` is a legal preprocessing
+	// token that is not an integer constant, and the phase that decodes it
+	// is the one entitled to say so.
+	if d := wantKinds(t, "1_024", token.INT_LIT); errCount(d) != 0 {
+		t.Errorf("1_024: %v, want no lexical diagnostic", d)
 	}
+	wantKinds(t, "10_0", token.INT_LIT)
+	wantKinds(t, "0x1Fu", token.INT_LIT)
 }
 
 func TestCharConstants(t *testing.T) {

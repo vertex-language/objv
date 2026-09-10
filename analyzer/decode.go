@@ -24,6 +24,7 @@ type IntValue struct {
 // already enforced the lexical grammar; this assigns value and type,
 // reporting only "too large".
 func DecodeIntConst(text string, m types.Model, report func(string)) IntValue {
+	raw := text
 	base := 10
 	switch {
 	case strings.HasPrefix(text, "0x"), strings.HasPrefix(text, "0X"):
@@ -50,6 +51,16 @@ func DecodeIntConst(text string, m types.Model, report func(string)) IntValue {
 			continue
 		}
 		break
+	}
+
+	// The suffix is checked here rather than in the scanner, because here
+	// is where the run has to be an integer constant. §2.3's PPNumber runs
+	// through identifier characters, so `1_024` and `10_2` are both legal
+	// preprocessing tokens; only one of them stands where a value is
+	// wanted, and Apple writes the other inside an availability attribute
+	// several hundred times per compilation.
+	if suffix := suffixOf(raw, base); !validIntSuffix(suffix) {
+		report("invalid suffix " + strconv.Quote(suffix) + " on integer constant")
 	}
 
 	// A digit outside the base contributes nothing rather than a nonsense
@@ -101,6 +112,46 @@ func DecodeIntConst(text string, m types.Model, report func(string)) IntValue {
 	}
 	report("integer constant is too large for any integer type")
 	return IntValue{val, types.Typ(types.ULongLong)}
+}
+
+// validIntSuffix is §6.4.4.1's IntegerSuffix: at most one unsigned part and
+// one long part, in either order, with `ll` not mixing case. ul, llu and ULL
+// pass; lul, lL and anything that is not one of those letters fail.
+func validIntSuffix(t string) bool {
+	var u, l bool
+	for i := 0; i < len(t); {
+		switch {
+		case (t[i] == 'u' || t[i] == 'U') && !u:
+			u = true
+			i++
+		case (t[i] == 'l' || t[i] == 'L') && !l:
+			l = true
+			if i+1 < len(t) && t[i+1] == t[i] { // ll or LL, never lL
+				i++
+			}
+			i++
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// suffixOf is the part of a spelling that follows the digits: what a suffix
+// would be if the run had one, which is what the diagnostic names.
+func suffixOf(text string, base int) string {
+	i := 0
+	if base == 16 || base == 2 {
+		i = 2
+	}
+	digit := func(c byte) bool { return digitVal(c) < base }
+	if base == 8 || base == 10 {
+		digit = func(c byte) bool { return c >= '0' && c <= '9' }
+	}
+	for i < len(text) && digit(text[i]) {
+		i++
+	}
+	return text[i:]
 }
 
 func digitVal(c byte) int {
