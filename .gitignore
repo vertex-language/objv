@@ -1,0 +1,7 @@
+# macOS
+.DS_Store
+
+# Go build and test output
+*.test
+*.out
+/objv

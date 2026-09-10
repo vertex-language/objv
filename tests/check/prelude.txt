@@ -1,0 +1,57 @@
+// This file is prepended to every file in tests/check.
+//
+// The corpus is hermetic — no headers, no SDK — so the handful of classes
+// the language itself names have to be declared somewhere. §6.8's literals
+// are sends to NSNumber, NSString, NSArray and NSDictionary; §7.1's fast
+// enumeration sends -countByEnumeratingWithState:objects:count:; and every
+// class needs a root to inherit from.
+__attribute__((objc_root_class))
+@interface NSObject
+- (instancetype)init;
++ (instancetype)alloc;
+- (id)copy;
+- (Class)class;
+@end
+
+@protocol NSCopying
+- (id)copyWithZone:(void *)zone;
+@end
+
+@protocol NSCoding
+- (void)encodeWithCoder:(id)coder;
+@end
+
+@interface NSString : NSObject <NSCopying>
+- (unsigned long)length;
+@end
+
+@interface NSMutableString : NSString
+- (void)appendString:(NSString *)s;
+@end
+
+@interface NSNumber : NSObject <NSCopying>
+- (int)intValue;
+@end
+
+@interface NSValue : NSObject
+@end
+
+@interface NSArray<ObjectType> : NSObject <NSCopying>
+- (ObjectType)objectAtIndexedSubscript:(unsigned long)i;
+- (unsigned long)count;
+@end
+
+@interface NSMutableArray<ObjectType> : NSArray<ObjectType>
+- (void)setObject:(ObjectType)object atIndexedSubscript:(unsigned long)i;
+@end
+
+@interface NSDictionary<KeyType, ObjectType> : NSObject <NSCopying>
+- (ObjectType)objectForKeyedSubscript:(KeyType)key;
+@end
+
+@interface NSMutableDictionary<KeyType, ObjectType> : NSDictionary<KeyType, ObjectType>
+- (void)setObject:(ObjectType)object forKeyedSubscript:(KeyType)key;
+@end
+
+@interface NSException : NSObject
+@end

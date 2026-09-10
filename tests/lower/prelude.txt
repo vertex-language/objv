@@ -1,0 +1,62 @@
+// This file is prepended to every file in tests/lower.
+//
+// It is tests/check's prelude with the class methods §6.8's literals send:
+// the analyzer only has to know the classes exist, but lowering emits real
+// sends to them and a selector that is not declared is not lowered.
+__attribute__((objc_root_class))
+@interface NSObject
+- (instancetype)init;
++ (instancetype)alloc;
+- (id)copy;
+- (Class)class;
+- (void)dealloc;
+@end
+
+@protocol NSCopying
+- (id)copyWithZone:(void *)zone;
+@end
+
+@protocol NSCoding
+@required
+- (void)encodeWithCoder:(id)coder;
+@optional
+- (id)initWithCoder:(id)coder;
+@end
+
+@interface NSString : NSObject <NSCopying>
+- (unsigned long)length;
++ (instancetype)stringWithUTF8String:(const char *)s;
+@end
+
+@interface NSNumber : NSObject <NSCopying>
+- (int)intValue;
++ (NSNumber *)numberWithInt:(int)v;
++ (NSNumber *)numberWithUnsignedInt:(unsigned)v;
++ (NSNumber *)numberWithLong:(long)v;
++ (NSNumber *)numberWithDouble:(double)v;
++ (NSNumber *)numberWithBool:(_Bool)v;
++ (NSNumber *)numberWithChar:(char)v;
+@end
+
+@interface NSArray<ObjectType> : NSObject <NSCopying>
+- (ObjectType)objectAtIndexedSubscript:(unsigned long)i;
+- (unsigned long)count;
+- (unsigned long)countByEnumeratingWithState:(void *)state objects:(id *)buf count:(unsigned long)n;
++ (instancetype)arrayWithObjects:(const id *)objects count:(unsigned long)n;
+@end
+
+@interface NSMutableArray<ObjectType> : NSArray<ObjectType>
+- (void)setObject:(ObjectType)object atIndexedSubscript:(unsigned long)i;
+@end
+
+@interface NSDictionary<KeyType, ObjectType> : NSObject <NSCopying>
+- (ObjectType)objectForKeyedSubscript:(KeyType)key;
++ (instancetype)dictionaryWithObjects:(const id *)objects forKeys:(const id *)keys count:(unsigned long)n;
+@end
+
+@interface NSMutableDictionary<KeyType, ObjectType> : NSDictionary<KeyType, ObjectType>
+- (void)setObject:(ObjectType)object forKeyedSubscript:(KeyType)key;
+@end
+
+@interface NSException : NSObject
+@end
