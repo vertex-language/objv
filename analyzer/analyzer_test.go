@@ -534,3 +534,18 @@ func names(cs []analyzer.Capture) []string {
 	}
 	return out
 }
+
+// ---- @available ----
+
+// A clause naming a platform this build is not for is ignored and the check
+// succeeds, which is what the trailing `*` means. So a misspelled platform
+// does not fail — it quietly makes the check true — and that is the reason
+// to report it here.
+func TestAvailabilityClausesAreChecked(t *testing.T) {
+	clean(t, 0, `int f(void) { if (@available(macOS 10.12.1, iOS 13, *)) return 1; return 0; }`)
+
+	wantError(t, 0, `int f(void) { if (@available(mocOS 12.0, *)) return 1; return 0; }`,
+		"'mocOS' is not a platform name")
+	wantError(t, 0, `int f(void) { if (@available(macOS 1.2.3.4, *)) return 1; return 0; }`,
+		"is not a version")
+}

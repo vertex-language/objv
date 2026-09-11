@@ -5,6 +5,7 @@ import (
 	"github.com/vertex-language/ir/text"
 
 	"github.com/vertex-language/objv/lower"
+	"github.com/vertex-language/objv/runtime"
 )
 
 // Module lowers one input to VIR — the artifact `--emit vir` writes.
@@ -67,6 +68,18 @@ func (c *Compiler) Object(in Input) ([]byte, []Diagnostic, error) {
 	return obj, diags, nil
 }
 
+// deployment is the oldest OS this build runs on, which is what §6.10's
+// @available compares against. The sysroot settled it; this only reads it
+// back in the shape lower wants.
+func (c *Compiler) deployment() runtime.OSVersion {
+	_, r, _ := c.config()
+	return runtime.OSVersion{
+		Major: r.Deployment.Major,
+		Minor: r.Deployment.Minor,
+		Patch: r.Deployment.Patch,
+	}
+}
+
 // lowerUnit runs the last phase, appending its diagnostics to the unit's.
 //
 // It is separate from Module so that Build can lower without rendering, and
@@ -79,6 +92,8 @@ func (c *Compiler) lowerUnit(u *unit) *ir.Module {
 		Model:        u.target.Model(),
 		ABI:          u.target.ABI(),
 		Arch:         u.target.RuntimeArch(),
+		Platform:     u.target.Platform(),
+		Deployment:   c.deployment(),
 		ARC:          c.ARC,
 		SymbolPrefix: u.target.SymbolPrefix(),
 	})

@@ -94,6 +94,27 @@ function, which is what frees the heap copy if one was made. A `__block`
 declared inside a loop is disposed once at the end rather than once per
 iteration, which leaks a heap copy per iteration and nothing else.
 
+## `@available`
+
+§6.10's check asks about the machine the program is *running* on. An image
+with a deployment target of macOS 11 may be launched on 12, and this is how
+it finds out — which is why an API introduced after the deployment target can
+be called at all.
+
+Two of the three answers are constants. A clause naming this platform that
+the deployment target already satisfies is true and nothing is emitted: the
+linker records the deployment target in `LC_BUILD_VERSION`, so the comparison
+was settled before the program ran. A list naming no platform this image is
+for is true as well — that is what the trailing `*` means, and it is what
+lets one source file carry checks for platforms it is not being built for.
+
+Only a clause about this platform asking for something newer becomes a call,
+and the call is `_availability_version_check`, which is libSystem's. clang
+emits `__isPlatformVersionAtLeast` instead: compiler-rt's wrapper around the
+same function, with a fallback that reads SystemVersion.plist on systems too
+old to have it. objv links libSystem and not compiler-rt, and its Darwin
+deployment floor is above that fallback's range.
+
 ## Where the allocations go
 
 The entry block holds `ptr.alloc` and nothing else, and the body goes in a
@@ -318,7 +339,6 @@ expression:
 | a struct in a variadic argument | legal C, but there is no declared parameter to hang `byval` on, so nothing states how it travels |
 | `@try` / `@catch` / `@finally` | needs every call inside the region to become an `invoke` with an unwind edge. `@throw` is lowered; the rest is not |
 | a bit-field instance variable | the runtime writes an ivar's offset in bytes, so packing several into one word means agreeing with clang about which bits each gets — a second layout question with the non-fragile ABI on the other side |
-| `@available` | needs the availability tables |
 | inline assembly | `ir` has an asm form; nothing maps constraints onto it yet |
 
 ## Tests

@@ -52,6 +52,14 @@ type Options struct {
 	// than failing to link, which is why it is a field and not a guess.
 	Arch runtime.Arch
 
+	// Platform and Deployment are what §6.10's @available compares against:
+	// which platform this image is for, and the oldest version of it the
+	// image runs on. A check the deployment target already answers is a
+	// constant, which is the common case and the whole reason those two
+	// have to reach this package.
+	Platform   runtime.Platform
+	Deployment runtime.OSVersion
+
 	// ARC says the unit was analyzed with automatic reference counting on.
 	// It must match the mode analyzer.Check ran with: the ownership this
 	// package acts on is the ownership that analysis inferred.
@@ -94,7 +102,10 @@ type unit struct {
 	model types.Model
 	abi   runtime.ABI
 	arch  runtime.Arch
-	arc   bool
+
+	platform   runtime.Platform
+	deployment runtime.OSVersion
+	arc        bool
 
 	mod    *ir.Module
 	target ir.Target
@@ -194,31 +205,34 @@ func newUnit(src *token.File, file *ast.File, info *analyzer.Info, opt Options) 
 		name = "a"
 	}
 	abi := opt.ABI
+
 	if abi.PtrBytes == 0 {
 		abi.PtrBytes = int64(opt.Target.Layout().PtrBits / 8)
 	}
 	top := newScope(nil)
 	return &unit{
-		src:       src,
-		file:      file,
-		info:      info,
-		model:     opt.Model,
-		abi:       abi,
-		arch:      opt.Arch,
-		arc:       opt.ARC,
-		mod:       ir.NewModule(name, opt.Target),
-		target:    opt.Target,
-		top:       top,
-		scope:     top,
-		selRefs:   map[string]ir.Symbol{},
-		classRefs: map[string]ir.Symbol{},
-		superRefs: map[string]ir.Symbol{},
-		strs:      map[string]ir.Symbol{},
-		cstrs:     map[string]ir.Symbol{},
-		externs:   map[string]*ir.FuncImport{},
-		classSyms: map[string]ir.Symbol{},
-		defines:   map[string]bool{},
-		omitted:   map[string]bool{},
+		src:        src,
+		file:       file,
+		info:       info,
+		model:      opt.Model,
+		abi:        abi,
+		platform:   opt.Platform,
+		deployment: opt.Deployment,
+		arch:       opt.Arch,
+		arc:        opt.ARC,
+		mod:        ir.NewModule(name, opt.Target),
+		target:     opt.Target,
+		top:        top,
+		scope:      top,
+		selRefs:    map[string]ir.Symbol{},
+		classRefs:  map[string]ir.Symbol{},
+		superRefs:  map[string]ir.Symbol{},
+		strs:       map[string]ir.Symbol{},
+		cstrs:      map[string]ir.Symbol{},
+		externs:    map[string]*ir.FuncImport{},
+		classSyms:  map[string]ir.Symbol{},
+		defines:    map[string]bool{},
+		omitted:    map[string]bool{},
 
 		byrefHelpers: map[string]ir.Symbol{},
 

@@ -135,6 +135,12 @@ func options(name string) lower.Options {
 		ABI:          runtime.Darwin64(),
 		Arch:         runtime.ARM64,
 		SymbolPrefix: "_",
+
+		// A deployment target, so that §6.10's @available has something to
+		// fold against. 12.0 is old enough that a corpus file can ask for
+		// both answers.
+		Platform:   runtime.PlatformMacOS,
+		Deployment: runtime.OSVersion{Major: 12},
 	}
 }
 

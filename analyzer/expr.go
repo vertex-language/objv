@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/vertex-language/objv/ast"
+	"github.com/vertex-language/objv/runtime"
 	"github.com/vertex-language/objv/token"
 	"github.com/vertex-language/objv/types"
 )
@@ -187,6 +188,7 @@ func (c *checker) expr1(e ast.Expr) types.Type {
 
 	case *ast.AvailabilityExpr:
 		// §6.10: an ordinary primary expression whose value is a boolean.
+		c.checkAvailability(e)
 		return types.Typ(types.Int)
 	}
 	return nil
@@ -317,6 +319,31 @@ func (c *checker) identType(id *ast.Ident) types.Type {
 		c.report(id, "'"+name+"' is undeclared")
 	}
 	return nil
+}
+
+// checkAvailability reads §6.10's clauses and reports the two things that
+// can be wrong with one.
+//
+// Both matter because of what the trailing `*` means: a clause naming a
+// platform this build is not for is *ignored*, and the check succeeds. So a
+// misspelled platform, or a version the compiler cannot read, does not fail
+// — it quietly makes the check true, and the guarded code runs on systems
+// that do not have what it wanted.
+func (c *checker) checkAvailability(e *ast.AvailabilityExpr) {
+	for _, sp := range e.Specs {
+		if sp == nil || sp.Platform == nil {
+			continue
+		}
+		name := c.name(sp.Platform)
+		if _, ok := runtime.PlatformNamed(name); !ok {
+			c.report(sp.Platform, "'"+name+"' is not a platform name")
+			continue
+		}
+		text := string(c.unit.Slice(sp.Version.Lo, sp.Version.Hi))
+		if _, ok := runtime.ParseOSVersion(text); !ok {
+			c.report(sp, "'"+text+"' is not a version: one, two or three numbers")
+		}
+	}
 }
 
 // classObjectType is the type of a class name used as a value: a pointer to

@@ -88,6 +88,11 @@ type Target struct {
 	abi    objcrt.ABI
 	rtArch objcrt.Arch
 
+	// platform is what §6.10's @available compares a clause's name against,
+	// in the numbering LC_BUILD_VERSION uses. It is zero on a target with no
+	// such notion, where every availability check is the trailing `*`.
+	platform objcrt.Platform
+
 	// The machine's half.
 	arch   Arch
 	format Format
@@ -108,6 +113,10 @@ func (t Target) IR() ir.Target            { return t.irt }
 func (t Target) SymbolPrefix() string     { return t.prefix }
 func (t Target) ABI() objcrt.ABI          { return t.abi }
 func (t Target) RuntimeArch() objcrt.Arch { return t.rtArch }
+
+// Platform is the platform an @available clause has to name to be about this
+// target.
+func (t Target) Platform() objcrt.Platform { return t.platform }
 
 // Supports reports whether objv can build for this target, and says why not
 // when it cannot. A Target names a machine; it does not promise every hop
@@ -135,13 +144,13 @@ func darwinARM64() types.Model {
 var targets = map[string]Target{
 	"aarch64-macos": {
 		model: darwinARM64(), ldbl: ldblDouble, wint: "int",
-		abi: objcrt.Darwin64(), rtArch: objcrt.ARM64,
+		abi: objcrt.Darwin64(), rtArch: objcrt.ARM64, platform: objcrt.PlatformMacOS,
 		arch: ArchARM64, format: FormatMachO, irt: ir.AArch64MacOS,
 		prefix: "_",
 	},
 	"x86_64-macos": {
 		model: types.LP64(), ldbl: ldblX87, wint: "int",
-		abi: objcrt.Darwin64(), rtArch: objcrt.AMD64,
+		abi: objcrt.Darwin64(), rtArch: objcrt.AMD64, platform: objcrt.PlatformMacOS,
 		arch: ArchAMD64, format: FormatMachO, irt: ir.X86_64MacOS,
 		prefix: "_",
 	},

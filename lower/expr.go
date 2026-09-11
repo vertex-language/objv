@@ -139,8 +139,7 @@ func (u *unit) rvalue(e ast.Expr) ir.Value {
 		return nil
 
 	case *ast.AvailabilityExpr:
-		u.unsupported(e, "@available")
-		return nil
+		return u.availability(e)
 	}
 	u.unsupported(e, "this expression")
 	return nil
