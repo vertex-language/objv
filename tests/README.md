@@ -99,6 +99,11 @@ declared type prints perfectly well.
 analyzer only has to know that NSNumber exists; lowering emits a real
 `numberWithInt:` to it, and a selector nothing declared is not lowered.
 
+A file with `// arc` on a line of its own is read with automatic reference
+counting. The two memory models are two lowerings of one language rather than
+a pass over each other, so a retain is a fact about the module like any
+other.
+
 Used by `lower`, in `corpus_test.go`. The syntax corpus is run through
 lowering too, as a crash test.
 

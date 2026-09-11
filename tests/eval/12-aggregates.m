@@ -60,3 +60,17 @@ long sends(Geo *g) { return [g sum:[g pair]]; }
 // §6.5.2.3 does not make it an lvalue — `pair().a = 1` is still refused —
 // but it has to read from somewhere.
 long first(Geo *g) { return [g pair].a; }
+
+// An aggregate's value is its address, whichever storage it is in: a local,
+// a global, an instance variable, or a __block variable. The four have to
+// agree, because a struct does not fit a register and what a caller means by
+// "the value" is the thing the ABI will copy.
+typedef struct { double x, y; } Vec;
+double vecSum(Vec v);
+@interface Holder : NSObject { Vec _v; }
+- (double)total;
+@end
+@implementation Holder
+- (double)total { return vecSum(_v); }
+@end
+// vir: call @_vecSum(

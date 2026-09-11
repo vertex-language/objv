@@ -108,13 +108,23 @@ func lowerSource(t *testing.T, name string, src []byte) (string, *ir.Module) {
 	for _, d := range diags {
 		t.Errorf("parse: %s", d.Print(f))
 	}
-	info, ds := analyzer.Check(f, file, types.LP64(), 0)
+	// A file says `// arc:` on a line of its own to be read with automatic
+	// reference counting. The two memory models are two lowerings of one
+	// language, and the retains are the half nothing else here covers.
+	mode := analyzer.Mode(0)
+	arc := strings.Contains(string(src), "\n// arc\n")
+	if arc {
+		mode = analyzer.ARC
+	}
+	info, ds := analyzer.Check(f, file, types.LP64(), mode)
 	for _, d := range ds {
 		if d.Severity == token.Error {
 			t.Errorf("check: %s", d.Print(f))
 		}
 	}
-	mod, lds := lower.Lower(f, file, info, options(filepath.Base(name)))
+	opts := options(filepath.Base(name))
+	opts.ARC = arc
+	mod, lds := lower.Lower(f, file, info, opts)
 	for _, d := range lds {
 		if d.Severity == token.Error {
 			t.Errorf("lower: %s", d.Print(f))

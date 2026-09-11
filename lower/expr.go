@@ -293,7 +293,11 @@ func (u *unit) identValue(id *ast.Ident, t types.Type) ir.Value {
 		}
 		return u.loadFrom(st.addr, st.typ)
 	case stByref:
-		return u.loadFrom(u.byrefAddr(st.byref, st.addr), st.typ)
+		p := u.byrefAddr(st.byref, st.addr)
+		if isAggregate(st.typ) {
+			return p
+		}
+		return u.loadFrom(p, st.typ)
 	case stIvar:
 		if u.ivarIsBitField(st) {
 			u.unsupported(id, "an instance variable declared as a bit-field")
@@ -302,6 +306,13 @@ func (u *unit) identValue(id *ast.Ident, t types.Type) ir.Value {
 		addr := u.ivarAddr(st.class, st.ivar)
 		if addr == nil {
 			return nil
+		}
+		// An aggregate's value is its address — that is what every caller
+		// here means by one, because a struct does not fit a register and
+		// nothing but the ABI decides how it travels. The four kinds of
+		// storage have to agree about it, and the two above already did.
+		if isAggregate(st.typ) {
+			return *addr
 		}
 		return u.loadFrom(*addr, st.typ)
 	}
@@ -1294,6 +1305,9 @@ func (u *unit) cast(e *ast.CastExpr, t types.Type) ir.Value {
 	if types.IsPointer(t) && u.isNullConstant(e.X) {
 		return u.fn.cur.Ptr.Const()
 	}
+	if e.IsBridge() {
+		return u.bridgeCast(e, t)
+	}
 	v := u.rvalue(e.X)
 	if v == nil {
 		return nil
@@ -1302,6 +1316,43 @@ func (u *unit) cast(e *ast.CastExpr, t types.Type) ir.Value {
 		return nil
 	}
 	return u.convert(v, u.typeOf(e.X), t)
+}
+
+// bridgeCast lowers §6.5's three bridge keywords, which are casts about
+// ownership and about nothing else: the bits are the same pointer either
+// way, and what differs is who owes a release.
+//
+// __bridge moves nothing. __bridge_retained hands ARC's reference *out* —
+// the result is +1 and belongs to whatever C code takes it, which is why
+// CFBridgingRetain is spelled with it and why the program is expected to
+// CFRelease. __bridge_transfer takes a +1 the other way, so the value
+// arrives owned and either something claims it or the end of the statement
+// releases it.
+//
+// Getting this wrong is not a leak in one direction and a leak in the other:
+// a __bridge_retained lowered as a plain cast leaves ARC still holding a
+// reference the program has also handed to CFRelease, which is a double
+// release and a crash somewhere else entirely.
+func (u *unit) bridgeCast(e *ast.CastExpr, t types.Type) ir.Value {
+	v := u.rvalue(e.X)
+	if v == nil || types.IsVoid(t) {
+		return nil
+	}
+	v = u.convert(v, u.typeOf(e.X), t)
+	if !u.arcOn() {
+		// Without ARC there is no ownership for the keyword to describe,
+		// which the analyzer has already said.
+		return v
+	}
+	switch e.Op.String() {
+	case "__bridge_retained":
+		// A reference for the far side, taken without disturbing the one
+		// the operand's own storage holds.
+		return u.retain(v, u.typeOf(e.X))
+	case "__bridge_transfer":
+		u.owns(v)
+	}
+	return v
 }
 
 func stripParens(e ast.Expr) ast.Expr {

@@ -88,6 +88,7 @@ type program struct {
 	files      []string // every source, in link order
 	foreign    []string // the ones clang compiles in both builds
 	frameworks []string
+	libraries  []string
 	modes      []bool
 }
 
@@ -132,10 +133,16 @@ func programOf(t *testing.T, path string) program {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, fw := range frameworksOf(string(src)) {
+		for _, fw := range markerOf(string(src), "// frameworks:") {
 			if !seen[fw] {
 				seen[fw] = true
 				p.frameworks = append(p.frameworks, fw)
+			}
+		}
+		for _, lib := range markerOf(string(src), "// libraries:") {
+			if !seen["-l"+lib] {
+				seen["-l"+lib] = true
+				p.libraries = append(p.libraries, lib)
 			}
 		}
 		if m := modeOf(string(src)); m != nil {
@@ -174,11 +181,12 @@ func modeOf(src string) []bool {
 	return nil
 }
 
-// frameworksOf reads the `// frameworks:` line of one file.
-func frameworksOf(src string) []string {
+// markerOf reads the words after a `// name:` line. Foundation is always
+// linked; a program that needs another framework, or a library, says so.
+func markerOf(src, name string) []string {
 	var out []string
 	for _, line := range strings.Split(src, "\n") {
-		rest, ok := strings.CutPrefix(strings.TrimSpace(line), "// frameworks:")
+		rest, ok := strings.CutPrefix(strings.TrimSpace(line), name)
 		if !ok {
 			continue
 		}
@@ -209,7 +217,8 @@ func buildWithObjv(t *testing.T, clang string, p program, dir string, arc bool) 
 	}
 	c := objv.Compiler{ARC: arc}
 	if err := c.Build(objv.BuildParams{
-		Output: bin, Inputs: inputs, Frameworks: p.frameworks,
+		Output: bin, Inputs: inputs,
+		Frameworks: p.frameworks, Libraries: p.libraries,
 	}); err != nil {
 		t.Fatalf("objv build: %v", err)
 	}
@@ -223,6 +232,9 @@ func buildWithClang(t *testing.T, clang string, p program, dir string, arc bool)
 	args = append(args, p.files...)
 	for _, f := range p.frameworks {
 		args = append(args, "-framework", f)
+	}
+	for _, l := range p.libraries {
+		args = append(args, "-l"+l)
 	}
 	if out, err := exec.Command(clang, args...).CombinedOutput(); err != nil {
 		t.Fatalf("clang build: %v\n%s", err, out)
