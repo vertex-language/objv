@@ -110,6 +110,37 @@ func (u *unit) declareFile() {
 		}
 		u.defines[name] = true
 	}
+
+	// And which file-scope *objects* it defines, for the same reason. A
+	// header writes `extern int counter;` and the file below it writes
+	// `int counter = 0;`, and whichever is read first decides whether the
+	// module defines the name or imports it — so the answer is settled
+	// before either is read.
+	//
+	// §6.9.2's tentative definition counts: `int counter;` at file scope
+	// with no initializer defines the object too, and a unit with both that
+	// and an extern declaration still defines one.
+	for _, d := range u.file.Decls {
+		g, ok := d.(*ast.GenDecl)
+		if !ok {
+			continue
+		}
+		sp := u.specs(g)
+		if sp.storage == token.TYPEDEF || sp.storage == token.EXTERN {
+			continue
+		}
+		for _, it := range g.List {
+			name := u.name(declName(it.Decl))
+			t := u.typeOf(it)
+			if name == "" || t == nil {
+				continue
+			}
+			if types.Unqualify(t).Kind() == types.FuncKind {
+				continue // a prototype, which declareFuncName settles
+			}
+			u.definesVar[name] = true
+		}
+	}
 	for _, d := range u.file.Decls {
 		switch d := d.(type) {
 		case *ast.GenDecl:
@@ -185,7 +216,7 @@ func (u *unit) declareGlobalVar(name string, t types.Type, sp declSpec, at ast.N
 		return
 	}
 
-	if sp.storage == token.EXTERN {
+	if !u.definesVar[name] {
 		u.top.names[name] = &storage{kind: stGlobal, typ: t,
 			imp: &pendingImport{sym: u.sym(name), ftyp: f}}
 		return

@@ -251,3 +251,30 @@ void b(void) { int (^x)(void) = ^{ return 1; }; (void)x; }
 		}
 	}
 }
+
+// A header's `extern int counter;` and the definition below it are one
+// object, and whichever declaration is read first must not decide whether
+// the module defines the name or imports it. Reading the extern first and
+// then skipping the definition leaves the object undefined — which links
+// only if some other unit happens to define it.
+func TestExternThenDefinition(t *testing.T) {
+	out, diags := build(t, "extern int counter;\nint counter = 7;\n")
+	for _, d := range diags {
+		t.Errorf("%v", d.Message)
+	}
+	mustContain(t, out, "global rw @_counter")
+	if strings.Contains(out, "import global @_counter") {
+		t.Error("the object was imported by the module that defines it")
+	}
+}
+
+// §6.9.2's tentative definition is a definition too: `int a;` at file scope
+// with no initializer defines the object, and a unit with both that and an
+// extern declaration still defines one.
+func TestTentativeDefinition(t *testing.T) {
+	out, _ := build(t, "extern int a;\nint a;\n")
+	mustContain(t, out, "global rw @_a")
+	if strings.Contains(out, "import global @_a") {
+		t.Error("a tentative definition was imported")
+	}
+}

@@ -147,6 +147,11 @@ type unit struct {
 	defines map[string]bool
 	funcs   map[string]*ir.Func
 
+	// definesVar is the same answer for file-scope objects: a header's
+	// extern declaration and the definition below it are one object, and
+	// whichever is read first must not decide which it is.
+	definesVar map[string]bool
+
 	// omitted is the definitions notEmitted refused, by name. They are not
 	// imports either: an import is a promise the linker has to keep, and
 	// there is no symbol anywhere for an unused static function. Nothing
@@ -232,6 +237,7 @@ func newUnit(src *token.File, file *ast.File, info *analyzer.Info, opt Options) 
 		externs:    map[string]*ir.FuncImport{},
 		classSyms:  map[string]ir.Symbol{},
 		defines:    map[string]bool{},
+		definesVar: map[string]bool{},
 		omitted:    map[string]bool{},
 
 		byrefHelpers: map[string]ir.Symbol{},
