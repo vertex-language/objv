@@ -699,3 +699,30 @@ func TestPropertyAssignmentAndItsMembers(t *testing.T) {
 	@end
 	void f(View *v) { v.origin.x = 1; }`, "cannot assign to a member of a property")
 }
+
+// A method is declared where it is declared: -allKeys is NSDictionary's, and
+// the `NSArray<KeyType> *` it returns names NSDictionary's KeyType — while a
+// receiver of NSMutableDictionary<NSString *, NSString *> binds
+// NSMutableDictionary's, which are different objects with the same spelling.
+// The subclass's superclass clause is the link between them.
+func TestTypeArgumentsCarryUpTheChain(t *testing.T) {
+	clean(t, 0, `
+	@interface Box<T> : NSObject
+	- (NSArray<T> *)all;
+	@end
+	@interface MutableBox<T> : Box<T>
+	@end
+	NSArray<NSString *> *f(MutableBox<NSString *> *b) { return [b all]; }`)
+}
+
+// A block written with concrete parameters is what a signature of `id`
+// describes: every collection method is called that way.
+func TestBlockParameterMatchesID(t *testing.T) {
+	clean(t, 0, `
+	@interface Nums : NSObject
+	- (void)sortUsing:(long (^)(id, id))cmp;
+	@end
+	void f(Nums *n) {
+		[n sortUsing:^long(NSNumber *a, NSNumber *b) { (void)a; (void)b; return 0; }];
+	}`)
+}

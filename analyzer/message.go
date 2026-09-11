@@ -341,7 +341,43 @@ func (c *checker) substTypeArgs(t types.Type, recv types.Type) types.Type {
 	if o == nil || o.Base == nil || len(o.Args) == 0 || t == nil {
 		return t
 	}
-	return substParams(t, o.Base.TypeParams, o.Args)
+	params, args := substChain(o.Base, o.Args)
+	return substParams(t, params, args)
+}
+
+// substChain is every type parameter of the receiver's class *and of its
+// superclasses*, paired with what each is bound to.
+//
+// A method is declared where it is declared. -allKeys is NSDictionary's, and
+// the `NSArray<KeyType> *` it returns names NSDictionary's KeyType — while a
+// receiver of type NSMutableDictionary<NSString *, NSString *> binds
+// NSMutableDictionary's, which are different objects with the same spelling.
+// `@interface NSMutableDictionary<KeyType, ObjectType> :
+// NSDictionary<KeyType, ObjectType>` is the link that carries one to the
+// other, and Class.SuperArgs is that link.
+func substChain(k *types.Class, args []types.Type) ([]*types.TypeParam, []types.Type) {
+	var params []*types.TypeParam
+	var out []types.Type
+	for depth := 0; k != nil && len(args) > 0 && depth < 32; depth++ {
+		n := len(k.TypeParams)
+		if len(args) < n {
+			n = len(args)
+		}
+		params = append(params, k.TypeParams[:n]...)
+		out = append(out, args[:n]...)
+
+		if k.Super == nil || len(k.SuperArgs) == 0 {
+			break
+		}
+		// The superclass's arguments, with this class's parameters resolved
+		// to what the receiver was specialized with.
+		next := make([]types.Type, len(k.SuperArgs))
+		for i, a := range k.SuperArgs {
+			next[i] = substParams(a, k.TypeParams[:n], args[:n])
+		}
+		k, args = k.Super, next
+	}
+	return params, out
 }
 
 func substParams(t types.Type, params []*types.TypeParam, args []types.Type) types.Type {

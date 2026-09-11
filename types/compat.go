@@ -481,14 +481,33 @@ func compatibleSig(a, b *Func) bool {
 	return true
 }
 
-// compatibleErased is Compatible, except that a type parameter on either
-// side matches any object pointer. Only a type parameter relaxes anything:
-// two unrelated classes are still two types.
+// compatibleErased is Compatible, except that a type parameter or an `id` on
+// either side matches any object pointer.
+//
+// Both relaxations are the same one: a name with no class behind it. §5.5's
+// parameter is erased and `id` never had one, and a block written in terms
+// of either is a block the other's signature describes —
+//
+//   - (void)sortUsingComparator:(NSComparisonResult (^)(id, id))cmp;
+//     [nums sortUsingComparator:^(NSNumber *a, NSNumber *b) { … }];
+//
+// is the shape every collection method is called with. Nothing else relaxes:
+// two named classes are still two types.
 func compatibleErased(a, b Type) bool {
-	if AsTypeParam(a) != nil || AsTypeParam(b) != nil {
+	if isUniversalObject(a) || isUniversalObject(b) {
 		return IsObjCObject(a) && IsObjCObject(b)
 	}
 	return Compatible(a, b)
+}
+
+// isUniversalObject reports whether a type is one every object pointer
+// answers to: §5.5's erased parameter, or `id` itself.
+func isUniversalObject(t Type) bool {
+	if AsTypeParam(t) != nil {
+		return true
+	}
+	o := AsObject(t)
+	return o != nil && o.Base == nil && !o.Meta && len(o.Protocols) == 0
 }
 
 // objcAssignable is the assignment rule for object and block pointers.

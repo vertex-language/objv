@@ -38,6 +38,18 @@ type Class struct {
 
 	Protocols  []*Protocol
 	TypeParams []*TypeParam
+
+	// SuperArgs is what the superclass was specialized with, written in
+	// terms of this class's own parameters:
+	//
+	//	@interface NSMutableDictionary<KeyType, ObjectType> :
+	//	    NSDictionary<KeyType, ObjectType>
+	//
+	// A method is declared where it is declared — -allKeys is
+	// NSDictionary's, and its `NSArray<KeyType> *` names *NSDictionary's*
+	// KeyType — so a receiver specialized on the subclass's parameters can
+	// only be substituted into it by carrying the arguments up this link.
+	SuperArgs  []Type
 	Ivars      []Ivar
 	Methods    []*Method
 	Properties []*Property

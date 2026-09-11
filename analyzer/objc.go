@@ -130,6 +130,15 @@ func (c *checker) checkInterface(d *ast.ClassInterfaceDecl) {
 	}
 
 	c.withTypeParams(k, d.TypeParams, func() {
+		// What the superclass was specialized with, in terms of this
+		// class's own parameters, which is why it is built here: §5.5's
+		// arguments may name them. See Class.SuperArgs.
+		if d.SuperArgs != nil && k.Super != nil {
+			k.SuperArgs = nil
+			for _, a := range d.SuperArgs.Args {
+				k.SuperArgs = append(k.SuperArgs, c.typeName(a))
+			}
+		}
 		if d.Ivars != nil {
 			c.addIvars(k, d.Ivars, types.VisProtected)
 		}
