@@ -78,6 +78,9 @@ func (u *unit) identAddr(id *ast.Ident) (*ir.Ptr, types.Type) {
 	case stLocal:
 		p := st.addr
 		return &p, st.typ
+	case stByref:
+		p := u.byrefAddr(st.byref, st.addr)
+		return &p, st.typ
 	case stGlobal, stFunc:
 		p := u.fn.cur.Ptr.GetAddr(u.symOf(st))
 		return &p, st.typ

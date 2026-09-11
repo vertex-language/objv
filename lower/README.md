@@ -62,6 +62,38 @@ demand either: a prototype whose definition is not emitted gets no import,
 and a declaration this package cannot give a VIR type is remembered and
 reported at the use, if a use comes.
 
+### `__block`
+
+A capture is a copy, which is what makes it const and a block cheap.
+`__block` asks for the other thing: one variable, shared by the function and
+by every block that captured it, and still shared after the block outlives
+the frame.
+
+It is arranged by moving the variable out of the frame into a structure of
+its own — `runtime.BlockByref` — that the frame and the literal both point
+at. Every access goes through that structure's `forwarding` field rather than
+to it directly, and the indirection is the mechanism: on the stack,
+forwarding points at the structure itself; when `_Block_copy` moves it to the
+heap, the stack copy's forwarding is rewritten to the heap one, and both
+frames go on reading one object.
+
+```
+    __block int n = 5;          n++ inside a block becomes
+                                byref->forwarding->n += 1
+ ┌──────────────┐
+ │ isa      = 0 │
+ │ forwarding ──┼──▶ itself, until _Block_copy says otherwise
+ │ flags    = 0 │
+ │ size    = 32 │
+ │ n        = 5 │
+ └──────────────┘
+```
+
+The structure is handed back to the runtime on every path out of the
+function, which is what frees the heap copy if one was made. A `__block`
+declared inside a loop is disposed once at the end rather than once per
+iteration, which leaks a heap copy per iteration and nothing else.
+
 ## Where the allocations go
 
 The entry block holds `ptr.alloc` and nothing else, and the body goes in a
@@ -254,8 +286,7 @@ expression:
 
 | | |
 | --- | --- |
-| `__block` variables | a block captures a copy; `__block` shares the variable, through a structure with a reference count of its own that both the function and the block reach it through |
-| a block capturing a struct by value | a memcpy into the literal and one back out |
+| a block capturing a struct by value, and `__block` on one | a memcpy into the literal and one back out |
 | a struct in a variadic argument | legal C, but there is no declared parameter to hang `byval` on, so nothing states how it travels |
 | `@try` / `@catch` / `@finally` | needs every call inside the region to become an `invoke` with an unwind edge. `@throw` is lowered; the rest is not |
 | bit-fields | reading, writing, and initializing one |

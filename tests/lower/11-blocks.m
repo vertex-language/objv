@@ -77,3 +77,43 @@ int both(int n) {
 }
 @end
 // vir: %self_addr = ptr.add %block
+
+// __block: one variable, shared by the function and by every block that
+// captured it, and still shared after the block has outlived the frame.
+//
+// It lives in a structure of its own rather than in the frame, and every
+// access goes through that structure's forwarding field — which is what
+// makes it keep working when _Block_copy moves the structure to the heap
+// and rewrites the stack copy's forwarding to point at it.
+int shared(void) {
+    __block int n = 5;
+    Action bump = ^{ n++; };
+    bump();
+    return n;
+}
+// The header is 24 bytes and an int lands at 24, so the structure is 32 --
+// rounded up to a pointer, which is what clang writes into the size field.
+// vir: %n_byref = ptr.alloc 32 align 8
+// vir: i32.const 32
+// The literal captures the structure's address, and the copy helper hands
+// it to the runtime with BLOCK_FIELD_IS_BYREF.
+// vir: i32.const 8
+// Every access is a load of forwarding and then the variable's offset.
+// vir: i64.const 8
+// vir: i64.const 24
+
+// A __block object carries the structure's own helpers, and the flags say
+// so: BLOCK_BYREF_LAYOUT_UNRETAINED | BLOCK_BYREF_HAS_COPY_DISPOSE, which
+// is 0x52000000.
+NSString *held(NSString *s) {
+    __block NSString *box = s;
+    Action keep = ^{ [box length]; };
+    keep();
+    return box;
+}
+// vir: i32.const 1375731712
+// vir: @___Block_byref_object_copy_
+// vir: @___Block_byref_object_dispose_
+// BLOCK_FIELD_IS_OBJECT | BLOCK_BYREF_CALLER, which is what tells the
+// runtime the caller is the byref machinery.
+// vir: i32.const 131

@@ -601,3 +601,28 @@ func TestBlockFlags(t *testing.T) {
 		t.Errorf("BlockHasCopyDispose = %#x", uint32(got))
 	}
 }
+
+// The byref layouts, against what clang writes: a structure holding an int
+// is 32 bytes with the variable at 24, and one holding an object is 48 with
+// the variable at 40, the two helpers having taken 24 and 32.
+func TestBlockByrefLayout(t *testing.T) {
+	a := runtime.Darwin64()
+	if got := a.SizeOf(runtime.BlockByref); got != 24 {
+		t.Errorf("sizeof block_byref = %d, want 24", got)
+	}
+	if got := a.SizeOf(runtime.BlockByrefWithHelpers); got != 40 {
+		t.Errorf("sizeof block_byref with helpers = %d, want 40", got)
+	}
+	if off, ok := a.OffsetOf(runtime.BlockByref, "forwarding"); !ok || off != 8 {
+		t.Errorf("forwarding at %d, want 8", off)
+	}
+	// The flags clang writes for a __block object: unretained layout plus
+	// the two helpers.
+	if got := runtime.BlockByrefLayoutUnretained | runtime.BlockByrefHasCopyDispose; got != 0x52000000 {
+		t.Errorf("object byref flags = %#x, want 0x52000000", uint32(got))
+	}
+	// And the flag its helpers pass, which is 0x83.
+	if got := runtime.BlockFieldObject | runtime.BlockByrefCaller; got != 131 {
+		t.Errorf("byref helper flag = %d, want 131", got)
+	}
+}

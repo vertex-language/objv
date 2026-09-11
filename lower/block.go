@@ -133,12 +133,15 @@ func (u *unit) placeCaptures(e *ast.BlockLit) ([]blockCapture, int64, bool) {
 	var out []blockCapture
 	for _, c := range u.info.Captures[e] {
 		if c.Block {
-			// A __block variable is not copied into the literal: it lives
-			// in a structure of its own that the literal points at, so that
-			// the function and every block that captured it see one
-			// variable. That structure is a separate piece of work.
-			u.unsupported(e, "a block capturing the __block variable '"+c.Name+"'")
-			return nil, 0, false
+			// A __block variable is not copied into the literal. What the
+			// literal holds is a pointer to the structure the variable
+			// lives in, so that the function and every block that captured
+			// it reach one variable. See byref.go.
+			off = alignUp(off, u.abi.PtrBytes)
+			out = append(out, blockCapture{Capture: c, off: off,
+				field: runtime.BlockFieldByref})
+			off += u.abi.PtrBytes
+			continue
 		}
 		if isAggregate(c.Type) && !types.IsArray(c.Type) {
 			// A captured struct is copied by value, which is a memcpy into
@@ -313,6 +316,17 @@ func (u *unit) blockInvoke(e *ast.BlockLit, sig *types.Func, caps []blockCapture
 	for _, c := range caps {
 		addr := u.fn.cur.Ptr.Add(blk, u.fn.cur.I64.Const(c.off))
 		u.fn.cur.Name(addr, c.Name+"_addr")
+		if c.Block {
+			// The block holds a pointer to the structure, so the structure
+			// is one load away and every access goes through its
+			// forwarding field from there — exactly as in the frame that
+			// declared it.
+			_, off, _, _ := u.byrefLayout(c.Type)
+			slot := u.fn.cur.Ptr.Load(addr)
+			u.bind(c.Name, &storage{kind: stByref, typ: c.Type, addr: slot,
+				byref: &byref{typ: c.Type, off: off}})
+			continue
+		}
 		u.bind(c.Name, &storage{kind: stLocal, typ: c.Type, addr: addr})
 		if c.Name == "self" && class != nil {
 			if p, ok := u.loadFrom(addr, c.Type).(ir.Ptr); ok {
@@ -435,6 +449,12 @@ func (u *unit) stackBlock(e *ast.BlockLit, p blockParts) ir.Value {
 		if st == nil {
 			u.errorf(e, "internal: the capture '"+c.Name+"' is not in scope")
 			return nil
+		}
+		// A __block capture is the structure's address, not the variable's
+		// value: that is the whole point of it.
+		if c.Block {
+			b.Ptr.Store(st.addr, at(c.off))
+			continue
 		}
 		v := u.loadFrom(st.addr, c.Type)
 		if v == nil {

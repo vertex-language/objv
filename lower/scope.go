@@ -28,6 +28,10 @@ const (
 	stIvar
 	// stEnum is an enumeration constant, which has no storage at all.
 	stEnum
+	// stByref is a __block variable: it lives in a structure of its own,
+	// and every access goes through that structure's forwarding field. See
+	// byref.go.
+	stByref
 )
 
 // storage is what a name means in the block being built.
@@ -42,6 +46,9 @@ type storage struct {
 	// imp is a declaration this unit has read and nothing has used yet.
 	// See unit.symOf.
 	imp *pendingImport
+	// byref is where the variable sits, for stByref. addr is the structure
+	// and this says where inside it to look.
+	byref *byref
 	// class and ivar name the instance variable, for stIvar.
 	class string
 	ivar  string

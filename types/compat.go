@@ -456,6 +456,41 @@ func sameProtocols(a, b []*Protocol) bool {
 	return true
 }
 
+// compatibleSig is Compatible for two signatures with type parameters
+// erased. A parameter declared `ObjectType` and one declared `id` are the
+// same parameter once the class's arguments are gone, which is what they are
+// at every call: the runtime has one representation for both.
+func compatibleSig(a, b *Func) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	if !compatibleErased(a.Ret, b.Ret) {
+		return false
+	}
+	if !a.Proto || !b.Proto {
+		return true // see the note on Compatible
+	}
+	if a.Variadic != b.Variadic || len(a.Params) != len(b.Params) {
+		return false
+	}
+	for i := range a.Params {
+		if !compatibleErased(AdjustParam(a.Params[i].Type), AdjustParam(b.Params[i].Type)) {
+			return false
+		}
+	}
+	return true
+}
+
+// compatibleErased is Compatible, except that a type parameter on either
+// side matches any object pointer. Only a type parameter relaxes anything:
+// two unrelated classes are still two types.
+func compatibleErased(a, b Type) bool {
+	if AsTypeParam(a) != nil || AsTypeParam(b) != nil {
+		return IsObjCObject(a) && IsObjCObject(b)
+	}
+	return Compatible(a, b)
+}
+
 // objcAssignable is the assignment rule for object and block pointers.
 //
 // The shape of it is the language's: `id` converts to and from every object
@@ -485,8 +520,16 @@ func objcAssignable(l, r Type, nullConst bool) AssignKind {
 
 	switch {
 	case lb != nil && rb != nil:
-		// Two blocks: compatible signatures, or a cast.
-		if Compatible(lb.Sig, rb.Sig) {
+		// Two blocks: compatible signatures, or a cast — with §5.5's type
+		// parameters erased on the way, for the reason stated above. It is
+		// what makes the block every collection method takes writable:
+		//
+		//	- (void)enumerateObjectsUsingBlock:(void (^)(ObjectType obj, …))b;
+		//	[xs enumerateObjectsUsingBlock:^(id obj, NSUInteger i, BOOL *s) { … }];
+		//
+		// ObjectType is id by the time there is a value, so the two
+		// signatures are the same signature.
+		if compatibleSig(lb.Sig, rb.Sig) {
 			return AssignOK
 		}
 		return AssignPointerMismatch

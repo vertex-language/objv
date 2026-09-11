@@ -114,6 +114,58 @@ const (
 	BlockRelease = "_Block_release"
 )
 
+// BlockByref is the structure a __block variable lives in.
+//
+// The variable is not in the block literal and not in the frame: it is in
+// this, which the literal points at, so that the function and every block
+// that captured it see one variable rather than one copy each. That is the
+// whole of what __block means.
+//
+// forwarding is why it works after the block outlives the frame. While the
+// structure is on the stack it points at itself; when _Block_copy moves it
+// to the heap, the stack copy's forwarding is rewritten to the heap one, and
+// every access — from the declaring function as much as from the block —
+// goes `byref->forwarding->x`. Both frames then read and write one object.
+//
+//	struct Block_byref {
+//	    void *isa;                       // null
+//	    struct Block_byref *forwarding;
+//	    int32_t flags;
+//	    int32_t size;
+//	    // if BLOCK_BYREF_HAS_COPY_DISPOSE:
+//	    void (*byref_keep)(void *dst, void *src);
+//	    void (*byref_destroy)(void *);
+//	    // the variable
+//	};
+var BlockByref = []Field{
+	{Ptr, "isa"},
+	{Ptr, "forwarding"},
+	{U32, "flags"},
+	{U32, "size"},
+}
+
+// BlockByrefWithHelpers is the structure when the variable is something the
+// runtime has to hand over rather than copy: the two helpers sit between the
+// header and the variable, which is why this is a second layout and not the
+// first with fields on the end.
+var BlockByrefWithHelpers = []Field{
+	{Ptr, "isa"},
+	{Ptr, "forwarding"},
+	{U32, "flags"},
+	{U32, "size"},
+	{Ptr, "byref_keep"},
+	{Ptr, "byref_destroy"},
+}
+
+// The flags word of a byref. The high nibble is a layout describing what the
+// variable is, and objv writes the two it can mean: nothing at all for a
+// variable the runtime need not touch, and unretained for an object under
+// manual reference counting, which is what clang writes there too.
+const (
+	BlockByrefHasCopyDispose   BlockFlag = 1 << 25
+	BlockByrefLayoutUnretained BlockFlag = 5 << 28
+)
+
 // What a copy or dispose helper says it is handling. The runtime's
 // BLOCK_FIELD_IS_* values: an object is retained and released, a block is
 // copied and released, and a __block variable — BLOCK_FIELD_IS_BYREF, which
@@ -121,6 +173,13 @@ const (
 const (
 	BlockFieldObject = 3 // BLOCK_FIELD_IS_OBJECT
 	BlockFieldBlock  = 7 // BLOCK_FIELD_IS_BLOCK
+	BlockFieldByref  = 8 // BLOCK_FIELD_IS_BYREF
+
+	// BlockByrefCaller is ored into the flag a *byref's own* helper passes,
+	// to say the caller is the byref machinery rather than a block's copy
+	// helper. The runtime's own tests read 0x83 out of clang's output for
+	// an object __block, which is this plus BlockFieldObject.
+	BlockByrefCaller = 128
 )
 
 // Block literal, descriptor and invoke labels.
@@ -135,9 +194,29 @@ func BlockInvokeSymbol(fn string) string { return "__" + fn + "_block_invoke" }
 func BlockCopySymbol(fn string) string    { return "__copy_helper_block_" + fn }
 func BlockDisposeSymbol(fn string) string { return "__destroy_helper_block_" + fn }
 
+// The byref's helpers. clang names them by what the variable is rather than
+// by which variable it is, because one helper serves every byref with an
+// object at the same offset.
+func BlockByrefCopySymbol(n int) string    { return "__Block_byref_object_copy_" + itoa(n) }
+func BlockByrefDisposeSymbol(n int) string { return "__Block_byref_object_dispose_" + itoa(n) }
+
 // The two labels a block's data carries. Both are internal: nothing outside
 // the image names either.
 const (
 	BlockDescriptorLabel = "__block_descriptor_tmp"
 	BlockLiteralLabel    = "__block_literal_global"
 )
+
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var b [20]byte
+	i := len(b)
+	for n > 0 {
+		i--
+		b[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(b[i:])
+}

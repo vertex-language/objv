@@ -143,6 +143,11 @@ type unit struct {
 	// in the used set.
 	omitted map[string]bool
 
+	// byrefHelpers are the helper functions a __block variable's structure
+	// carries, interned by name: one helper serves every structure with an
+	// object at the same offset.
+	byrefHelpers map[string]ir.Symbol
+
 	// blockBase is the name of the function whose body is being lowered and
 	// blockSeq the block literals seen inside it, which together name every
 	// symbol a literal produces. They belong to the outermost function and
@@ -214,6 +219,8 @@ func newUnit(src *token.File, file *ast.File, info *analyzer.Info, opt Options) 
 		classSyms: map[string]ir.Symbol{},
 		defines:   map[string]bool{},
 		omitted:   map[string]bool{},
+
+		byrefHelpers: map[string]ir.Symbol{},
 
 		undescribed: map[string]string{},
 		ivarSyms:    map[string]ir.Symbol{},

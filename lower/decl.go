@@ -37,6 +37,10 @@ type fnState struct {
 	// @autoreleasepool blocks, innermost last.
 	pools []ir.Ptr
 
+	// byrefs are the __block structures this function declared, which are
+	// handed back to the runtime on every path out. See byref.go.
+	byrefs []ir.Ptr
+
 	nblocks int
 }
 
@@ -562,6 +566,7 @@ func (u *unit) buildBody(fn *ir.Func, ft *types.Func, names []*ast.Ident,
 	// analyzer, and a trap is what a program that reaches here does.
 	if u.at() {
 		if types.IsVoid(ft.Ret) {
+			u.releaseByrefs()
 			u.fn.cur.Return()
 		} else {
 			u.fn.cur.Trap()

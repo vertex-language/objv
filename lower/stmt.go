@@ -152,6 +152,17 @@ func (u *unit) localDecl(d ast.Decl) {
 			u.bind(name, &storage{kind: stGlobal, typ: t, sym: sym})
 			continue
 		}
+		if sp.block {
+			// §6.9's __block: the variable lives in a structure the frame
+			// and every block that captured it both point at, so that they
+			// share one variable rather than one copy each.
+			b := u.declareByref(name, t, it)
+			if b == nil || it.Init == nil {
+				continue
+			}
+			u.initLocal(u.byrefAddr(b, b.slot), t, it.Init)
+			continue
+		}
 		slot := u.slot(t, name)
 		u.bind(name, &storage{kind: stLocal, typ: t, addr: slot})
 		if it.Init == nil {
@@ -192,6 +203,7 @@ func (u *unit) returnStmt(s *ast.ReturnStmt) {
 		return
 	}
 	if s.Result == nil {
+		u.releaseByrefs()
 		u.releasePools()
 		u.fn.cur.Return()
 		u.fn.cur = nil
@@ -211,12 +223,14 @@ func (u *unit) returnStmt(s *ast.ReturnStmt) {
 			return
 		}
 		u.copyAggregate(u.fn.sret, src, u.fn.ret)
+		u.releaseByrefs()
 		u.releasePools()
 		u.fn.cur.Return()
 		u.fn.cur = nil
 		return
 	}
 	v = u.convert(v, u.typeOf(s.Result), u.fn.ret)
+	u.releaseByrefs()
 	u.releasePools()
 	u.fn.cur.Return(v)
 	u.fn.cur = nil

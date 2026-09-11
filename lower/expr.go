@@ -246,6 +246,8 @@ func (u *unit) identValue(id *ast.Ident, t types.Type) ir.Value {
 			return st.addr
 		}
 		return u.loadFrom(st.addr, st.typ)
+	case stByref:
+		return u.loadFrom(u.byrefAddr(st.byref, st.addr), st.typ)
 	case stIvar:
 		addr := u.ivarAddr(st.class, st.ivar)
 		if addr == nil {
