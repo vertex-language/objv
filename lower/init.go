@@ -275,6 +275,21 @@ func (u *unit) fillRecord(addr ir.Ptr, r *types.Record, c *initCursor, at ast.No
 				}
 			}
 			if found < 0 {
+				// An anonymous member's members are this record's members:
+				// §6.7.2.1p13 says `.d` names the union's d when the union
+				// has no name of its own, and `{ .tag = 1, .d = 2.5 }` is
+				// how such a record is written. The designator is *not*
+				// consumed — the walk descends into the member and the
+				// record inside resolves the name itself, which is also
+				// what makes `.a` reach two anonymous levels down.
+				if j, ok := anonymousHolding(r, name); ok {
+					u.fill(b.Ptr.Add(addr, b.I64.Const(offs[j])), r.Fields[j].Type, c, at)
+					if r.Union {
+						return
+					}
+					i = j + 1
+					continue
+				}
 				// A designator naming no member of *this* record belongs
 				// to an enclosing one, and the walk inside a member has to
 				// stop rather than report. One that names nothing anywhere
@@ -307,6 +322,24 @@ func (u *unit) fillRecord(addr ir.Ptr, r *types.Record, c *initCursor, at ast.No
 		}
 		i++
 	}
+}
+
+// anonymousHolding is the index of the anonymous member through which name
+// is reachable.
+func anonymousHolding(r *types.Record, name string) (int, bool) {
+	for j := range r.Fields {
+		if r.Fields[j].Name != "" {
+			continue
+		}
+		inner := types.AsRecord(r.Fields[j].Type)
+		if inner == nil {
+			continue
+		}
+		if _, ok := findField(inner, name); ok {
+			return j, true
+		}
+	}
+	return 0, false
 }
 
 // designator is an item's next designator, if it still has one.

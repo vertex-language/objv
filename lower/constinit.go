@@ -288,6 +288,22 @@ func (u *unit) constRecord(r *types.Record, c *initCursor) (ir.Init, bool) {
 				}
 			}
 			if found < 0 {
+				// An anonymous member's members are this record's, so the
+				// walk descends into it with the designator still in hand
+				// and the record inside resolves the name. See
+				// init.go's fillRecord, which does the same for a local.
+				if j, ok := anonymousHolding(r, name); ok {
+					v, ok := u.constFill(r.Fields[j].Type, c)
+					if !ok {
+						return ir.Init{}, false
+					}
+					items[lay.slot[j]] = v
+					if r.Union {
+						return ir.Fields(ir.Val(st.Fields()[lay.slot[j]].Name, v)), true
+					}
+					i = j + 1
+					continue
+				}
 				// A designator naming no member of *this* record belongs
 				// to an enclosing one: `{ .a = 1, .d.c = 7, .name = "ok" }`
 				// returns to the outer struct after .d.c, and the walk

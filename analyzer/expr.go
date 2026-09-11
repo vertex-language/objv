@@ -463,8 +463,18 @@ func (c *checker) subscriptSend(e *ast.IndexExpr, recv, index types.Type, assign
 		if o := types.AsObject(recv); o != nil && o.Base != nil && o.Base.Complete {
 			c.report(e, "'"+o.Base.Name+"' does not implement '"+sel+
 				"', which subscripting requires")
+			return nil
 		}
-		return nil
+		// A receiver that names no class — id, a bare protocol
+		// qualification, an erased type parameter — is one the runtime
+		// resolves, exactly as it resolves a send written the long way.
+		// `id d = …; d[@"k"]` is legal and yields id; answering nil here
+		// left the expression untyped, and everything written around it
+		// untyped after that. See unresolvedSend in message.go.
+		if assigning {
+			return types.Typ(types.Void)
+		}
+		return types.ID()
 	}
 	if assigning {
 		if len(m.Params) > 0 {
@@ -884,7 +894,42 @@ func (c *checker) condType(e *ast.CondExpr) types.Type {
 	case types.IsPointer(f) && e.Then != nil && c.isNullConst(e.Then):
 		return f
 	}
+	// §6.5.15p6: two pointers to compatible types yield a pointer to the
+	// composite type, qualified with *both* pointees' qualifiers. The
+	// qualifiers are the whole point — `e ? e.domain.UTF8String : "none"`
+	// is one arm of type const char * and one of type char *, which is how
+	// every fallback for a string-returning method is written, and a
+	// compiler that calls those incompatible rejects the line.
+	if pt := c.compositePointer(t, f); pt != nil {
+		return pt
+	}
 	c.report(e, "the two arms of '?:' have incompatible types "+t.String()+" and "+f.String())
+	return nil
+}
+
+// compositePointer is §6.5.15p6's result type for two pointer arms, or nil
+// where they have none.
+//
+// A pointer to void and a pointer to an object type give a pointer to void,
+// which is what makes `flag ? ptr : NULL`-shaped code and every generic
+// callback table work. Otherwise the pointees must be compatible ignoring
+// their qualifiers, and what comes back carries the union of them: dropping
+// a const here would let a program write through a pointer one arm promised
+// not to.
+func (c *checker) compositePointer(t, f types.Type) types.Type {
+	pt, okT := types.Unqualify(t).(*types.Pointer)
+	pf, okF := types.Unqualify(f).(*types.Pointer)
+	if !okT || !okF {
+		return nil
+	}
+	quals := types.QualsOf(pt.Elem) | types.QualsOf(pf.Elem)
+	et, ef := types.Unqualify(pt.Elem), types.Unqualify(pf.Elem)
+	switch {
+	case types.IsVoid(et) || types.IsVoid(ef):
+		return &types.Pointer{Elem: types.Qualify(types.Typ(types.Void), quals)}
+	case types.Compatible(et, ef):
+		return &types.Pointer{Elem: types.Qualify(et, quals)}
+	}
 	return nil
 }
 
