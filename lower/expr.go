@@ -167,6 +167,9 @@ func (u *unit) rvalue(e ast.Expr) ir.Value {
 
 	case *ast.GenericExpr:
 		return u.generic(e)
+
+	case *ast.StmtExpr:
+		return u.stmtExpr(e, t)
 	}
 	u.unsupported(e, "this expression")
 	return nil

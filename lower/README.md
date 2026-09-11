@@ -519,6 +519,7 @@ expression:
 | an inline assembly operand | `ir` has the asm form and the operand-free statement is lowered; a constraint has to be mapped onto the target's register classes, and that table is not written |
 | an array of more than one variably modified dimension | `int a[n][m]`: its element type is itself variably modified, so `a[i]` has a stride nothing in `types.Array` records — every decay and every index would have to carry the extent along. The one-dimensional case is lowered; see vla.go |
 | `sizeof` applied to a variably modified *type name* | `sizeof(int[n])` has no object whose size was computed anywhere, so there is nothing to read it from |
+| `__label__` and `goto *p` | GNU's computed goto. `ir` has the block address (§D) and the arm64 backend selects it, so the lowering is the small half; the scanner, the parser and a block-local label scope are the rest. Nothing in the SDK uses it, which is why it is last |
 
 ## Tests
 
