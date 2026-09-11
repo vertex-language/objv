@@ -149,12 +149,43 @@ func (c *checker) checkGenDecl(d *ast.GenDecl, external bool) {
 		// Darwin reads. Nothing is reported when it does not fold — an
 		// address constant is equally valid there and is not an integer,
 		// and at block scope an initializer need not be constant at all.
-		if id.Init != nil && sym.kind == symObject && types.IsInteger(t) {
-			if v, ok := c.evalInt(id.Init); ok {
-				c.info.Consts[id.Init] = v
-			}
+		if id.Init != nil && sym.kind == symObject {
+			c.foldInitializer(id.Init)
 		}
 	}
+}
+
+// foldInitializer records every integer constant expression an initializer
+// contains, at whatever depth.
+//
+// §6.7.9p4: an object with static storage duration is initialized by
+// constant expressions, and §6.6 says what one is. Folding them here is what
+// keeps a single evaluator in the compiler — `-1` is an operator applied to
+// a literal, and a phase that knows only literals cannot initialize
+// `static const CFIndex kCFNotFound = -1;`, which <CFBase.h> writes and
+// every Objective-C program on Darwin reads. It reaches into braces because
+// a bit-field's initializer is down there and is packed into bytes rather
+// than emitted as a value.
+//
+// Nothing is reported when an expression does not fold. An address constant
+// is equally valid in the same place and is not an integer, and at block
+// scope an initializer need not be constant at all — what is recorded here
+// is only what *is* one, which is true wherever it was written.
+func (c *checker) foldInitializer(e ast.Expr) {
+	ast.Inspect(e, func(n ast.Node) bool {
+		x, ok := n.(ast.Expr)
+		if !ok {
+			return true
+		}
+		if _, isList := x.(*ast.InitList); isList {
+			return true
+		}
+		if v, ok := c.evalInt(x); ok {
+			c.info.Consts[x] = v
+			return false // its subexpressions are constants of this one
+		}
+		return true
+	})
 }
 
 func (c *checker) checkStorage(d ast.Node, sp types.Spec, external bool) {

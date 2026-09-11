@@ -246,6 +246,34 @@ order the body first named each one, which is the order they are laid out in.
 An instance variable inside a block captures `self`, because §4.5's `_count`
 is `self->_count` there as anywhere else.
 
+## Bit-fields
+
+§6.7.2.1p13 gives a bit-field no address, which is the whole of why it needs
+a file of its own. Every other member is read by computing an address and
+loading through it; a bit-field is read by loading the *allocation unit* it
+shares with its neighbours and shifting the bits out, and written by loading
+that unit, replacing the bits, and storing it back — a read-modify-write, for
+what the source wrote as an assignment.
+
+Where the bits are is not decided here. §6.7.2.1p11 leaves the allocation
+implementation-defined and the two answers in circulation disagree about
+ordinary structs, so the rule is the target's — `types.Model.MSBitfields` —
+and one walk computes both the record's size and each field's placement.
+`Model.BitPlaces` is that walk answering the second question, so the offsets
+emitted and the size reported cannot drift apart.
+
+The VIR type describes the *bytes*, not the fields: one array per merged
+range of bit-field bytes, alongside the ordinary members and sorted with
+them. The range is what the bits occupy rather than what the unit covers,
+because a unit may overlap an ordinary member — `struct { char c; int b : 3; }`
+opens a four-byte unit at zero and puts b in the byte after c — and two
+fields of a struct type may not overlap.
+
+The sign matters on the way out and not on the way in. A signed field of six
+bits holds -32..31, so reading one shifts left to put its top bit in the sign
+position and arithmetic-shifts back down; writing either only has to keep the
+bits that fit.
+
 ## Structs by value
 
 No calling convention passes a struct in a register, and what each does
@@ -289,7 +317,7 @@ expression:
 | a block capturing a struct by value, and `__block` on one | a memcpy into the literal and one back out |
 | a struct in a variadic argument | legal C, but there is no declared parameter to hang `byval` on, so nothing states how it travels |
 | `@try` / `@catch` / `@finally` | needs every call inside the region to become an `invoke` with an unwind edge. `@throw` is lowered; the rest is not |
-| bit-fields | reading, writing, and initializing one |
+| a bit-field instance variable | the runtime writes an ivar's offset in bytes, so packing several into one word means agreeing with clang about which bits each gets — a second layout question with the non-fragile ABI on the other side |
 | `@available` | needs the availability tables |
 | inline assembly | `ir` has an asm form; nothing maps constraints onto it yet |
 

@@ -168,7 +168,7 @@ func (m Model) Offsetof(t Type, name string) (int64, bool) {
 		return 0, false
 	}
 	offs := make([]int64, len(r.Fields))
-	if _, _, ok := m.layout(r, offs); !ok {
+	if _, _, ok := m.layoutWith(r, offs, nil); !ok {
 		return 0, false
 	}
 	for i, f := range r.Fields {
@@ -204,6 +204,31 @@ func (m Model) Offsetof(t Type, name string) (int64, bool) {
 // Offsetof refuses a bit-field before it reads one, so nothing depends on
 // the value.
 func (m Model) layout(r *Record, offs []int64) (size, align int64, ok bool) {
+	return m.layoutWith(r, offs, nil)
+}
+
+// BitPlaces is where each of a record's members landed as a bit-field: the
+// allocation unit's byte offset, the field's first bit within it, and the
+// unit's width in bytes. A member that is not a bit-field has a zero place,
+// and FieldOffsets is what says where that one is.
+//
+// It exists because lower needs the placement and not merely the size: a
+// bit-field is read by loading its allocation unit and shifting, and both
+// numbers come from the same walk that decided how big the record is. Asking
+// the layout for them is the only way the two cannot disagree.
+func (m Model) BitPlaces(t Type) ([]BitPlace, bool) {
+	r, ok := Unqualify(t).(*Record)
+	if !ok || !r.Complete {
+		return nil, false
+	}
+	places := make([]BitPlace, len(r.Fields))
+	if _, _, ok := m.layoutWith(r, nil, places); !ok {
+		return nil, false
+	}
+	return places, true
+}
+
+func (m Model) layoutWith(r *Record, offs []int64, places []BitPlace) (size, align int64, ok bool) {
 	align = 1
 	var cur BitCursor // the placement cursor; see bitfield.go
 	for i, f := range r.Fields {
@@ -258,9 +283,23 @@ func (m Model) layout(r *Record, offs []int64) (size, align int64, ok bool) {
 				// field goes at the next bit whatever its declared type is.
 				// It is the one case neither allocation rule describes.
 				cur.CloseUnit()
+				if places != nil {
+					// The unit is the byte the field starts in, and it is as
+					// wide as the field needs: packed means there is no
+					// allocation unit left to speak of.
+					start := cur.Bits
+					places[i] = BitPlace{
+						Off:    start / 8,
+						BitOff: start % 8,
+						Unit:   roundUp(start%8+f.Width, 8) / 8,
+					}
+				}
 				cur.Bits += f.Width
 			default:
-				cur.PlaceBitfield(m.MSBitfields, fs, fa, f.Width)
+				p := cur.PlaceBitfield(m.MSBitfields, fs, fa, f.Width)
+				if places != nil {
+					places[i] = p
+				}
 			}
 			continue
 		}

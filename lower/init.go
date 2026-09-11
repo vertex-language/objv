@@ -256,8 +256,17 @@ func (u *unit) fillRecord(addr ir.Ptr, r *types.Record, c *initCursor, at ast.No
 		}
 		f := r.Fields[i]
 		if f.BitField {
-			u.unsupported(at, "an initializer for a bit-field")
-			return
+			// A bit-field is written into its allocation unit rather than
+			// to an address of its own. A zero-width one initializes
+			// nothing: it is padding with a declaration.
+			if f.Width > 0 {
+				u.fillBitField(addr, r, i, c, at)
+			}
+			if r.Union {
+				return
+			}
+			i++
+			continue
 		}
 		u.fill(b.Ptr.Add(addr, b.I64.Const(offs[i])), f.Type, c, at)
 		if r.Union {

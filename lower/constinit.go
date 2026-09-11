@@ -228,6 +228,15 @@ func (u *unit) constRecord(r *types.Record, c *initCursor) (ir.Init, bool) {
 	for i := range items {
 		items[i] = ir.ZeroInit
 	}
+	offs, ok := u.model.FieldOffsets(r)
+	if !ok {
+		return ir.Init{}, false
+	}
+	lay, ok := u.virLayout(r, offs)
+	if !ok {
+		return ir.Init{}, false
+	}
+	bits := newBitImage(lay)
 	i := 0
 	for !c.done() && i < len(r.Fields) {
 		it := c.peek()
@@ -250,11 +259,23 @@ func (u *unit) constRecord(r *types.Record, c *initCursor) (ir.Init, bool) {
 			i = found
 			consumeDesignator(it)
 		}
+		if r.Fields[i].BitField {
+			// A bit-field's constant is packed into the bytes of its
+			// allocation unit rather than given a field of its own.
+			if r.Fields[i].Width > 0 && !bits.pack(u, r, i, c) {
+				return ir.Init{}, false
+			}
+			if r.Union {
+				break
+			}
+			i++
+			continue
+		}
 		v, ok := u.constFill(r.Fields[i].Type, c)
 		if !ok {
 			return ir.Init{}, false
 		}
-		items[i] = v
+		items[lay.slot[i]] = v
 		if r.Union {
 			// A union's value is its first member's, and VIR writes only
 			// that one: the rest of the object is what the member does not
@@ -263,5 +284,92 @@ func (u *unit) constRecord(r *types.Record, c *initCursor) (ir.Init, bool) {
 		}
 		i++
 	}
+	bits.emit(items)
 	return ir.List(items...), true
+}
+
+// bitImage is the bytes a record's bit-field constants pack into.
+//
+// A file-scope initializer is a value rather than code, so there is no
+// read-modify-write to emit: the bits are or'd into a buffer here and the
+// buffer becomes the array field recordType appended for that range.
+//
+// The packing is little-endian, which is what the load in bitfield.go reads
+// back: the allocation unit is loaded as an integer, so bit k of it is bit
+// k%8 of byte k/8. Every target objv emits for says `endian little`.
+type bitImage struct {
+	lay  *virLayout
+	bufs [][]byte // one per range, nil until something writes to it
+}
+
+func newBitImage(lay *virLayout) *bitImage {
+	return &bitImage{lay: lay, bufs: make([][]byte, len(lay.ranges))}
+}
+
+// pack folds the next initializer into the bit-field at index i.
+func (b *bitImage) pack(u *unit, r *types.Record, i int, c *initCursor) bool {
+	places, ok := u.model.BitPlaces(r)
+	if !ok {
+		return false
+	}
+	it := c.peek()
+	if it == nil {
+		return true
+	}
+	c.i++
+	if it.Value == nil {
+		return true
+	}
+	v, ok := u.foldInt(it.Value)
+	if !ok {
+		return false
+	}
+	p := places[i]
+	bit := p.Off*8 + p.BitOff
+	k := b.rangeOf(bit / 8)
+	if k < 0 {
+		return false
+	}
+	if b.bufs[k] == nil {
+		b.bufs[k] = make([]byte, b.lay.ranges[k][1]-b.lay.ranges[k][0])
+	}
+	buf := b.bufs[k]
+	start := bit - b.lay.ranges[k][0]*8
+	for n := int64(0); n < r.Fields[i].Width; n++ {
+		if v&(1<<uint(n)) == 0 {
+			continue
+		}
+		bit := start + n
+		if bit/8 >= int64(len(buf)) {
+			return false
+		}
+		buf[bit/8] |= 1 << uint(bit%8)
+	}
+	return true
+}
+
+func (b *bitImage) rangeOf(off int64) int {
+	for k, rg := range b.lay.ranges {
+		if off >= rg[0] && off < rg[1] {
+			return k
+		}
+	}
+	return -1
+}
+
+// emit writes each range's bytes into the initializer list.
+func (b *bitImage) emit(items []ir.Init) {
+	for k, buf := range b.bufs {
+		if buf == nil {
+			continue
+		}
+		// A byte per element rather than one literal for the run: the
+		// field is an array, and §19.10 checks an initializer's shape
+		// against the type it is for.
+		es := make([]ir.Init, len(buf))
+		for i, c := range buf {
+			es[i] = ir.Lit(ir.Int(int64(c)))
+		}
+		items[b.lay.rslot[k]] = ir.List(es...)
+	}
 }

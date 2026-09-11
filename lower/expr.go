@@ -78,12 +78,21 @@ func (u *unit) rvalue(e ast.Expr) ir.Value {
 		if v, done := u.objcIncDec(e.X, e.Op, true); done {
 			return v
 		}
+		if m, ok := stripParens(e.X).(*ast.MemberExpr); ok {
+			if base, bf, isBF := u.bitFieldMember(m); isBF {
+				return u.incDecBitField(base, bf, e.Op, true)
+			}
+		}
 		return u.incDec(e.X, e.Op, t, true)
 
 	case *ast.MemberExpr:
 		// Dot syntax on an object is the getter, not a member.
 		if r := u.propertyRef(e); r != nil {
 			return r.load(u)
+		}
+		// A bit-field has no address, so it is not read through one.
+		if base, bf, ok := u.bitFieldMember(e); ok {
+			return u.loadBitField(base, bf)
 		}
 		return u.lvalueRead(e)
 
@@ -249,6 +258,10 @@ func (u *unit) identValue(id *ast.Ident, t types.Type) ir.Value {
 	case stByref:
 		return u.loadFrom(u.byrefAddr(st.byref, st.addr), st.typ)
 	case stIvar:
+		if u.ivarIsBitField(st) {
+			u.unsupported(id, "an instance variable declared as a bit-field")
+			return nil
+		}
 		addr := u.ivarAddr(st.class, st.ivar)
 		if addr == nil {
 			return nil
@@ -310,6 +323,11 @@ func (u *unit) unary(e *ast.UnaryExpr, t types.Type) ir.Value {
 	case token.INC, token.DEC:
 		if v, done := u.objcIncDec(e.X, e.Op, false); done {
 			return v
+		}
+		if m, ok := stripParens(e.X).(*ast.MemberExpr); ok {
+			if base, bf, isBF := u.bitFieldMember(m); isBF {
+				return u.incDecBitField(base, bf, e.Op, false)
+			}
 		}
 		return u.incDec(e.X, e.Op, t, false)
 	}
@@ -862,6 +880,14 @@ func (u *unit) assign(e *ast.AssignExpr, t types.Type) ir.Value {
 	// have no address for the ordinary path below to write to.
 	if v, done := u.objcAssign(e, t); done {
 		return v
+	}
+
+	// A bit-field is not assigned to; its unit is read, its bits replaced,
+	// and the unit written back.
+	if m, ok := stripParens(e.Lhs).(*ast.MemberExpr); ok {
+		if base, bf, isBF := u.bitFieldMember(m); isBF {
+			return u.assignBitField(e, base, bf)
+		}
 	}
 
 	addr, at := u.lvalue(e.Lhs)

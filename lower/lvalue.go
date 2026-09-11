@@ -85,6 +85,10 @@ func (u *unit) identAddr(id *ast.Ident) (*ir.Ptr, types.Type) {
 		p := u.fn.cur.Ptr.GetAddr(u.symOf(st))
 		return &p, st.typ
 	case stIvar:
+		if u.ivarIsBitField(st) {
+			u.unsupported(id, "an instance variable declared as a bit-field")
+			return nil, nil
+		}
 		p := u.ivarAddr(st.class, st.ivar)
 		return p, st.typ
 	}
