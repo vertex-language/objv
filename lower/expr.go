@@ -1133,7 +1133,7 @@ func (u *unit) call(e *ast.CallExpr, t types.Type) ir.Value {
 	if id, ok := stripParens(e.Fun).(*ast.Ident); ok {
 		if st := u.lookup(u.name(id)); st != nil && st.kind == stFunc {
 			if callee, ok := u.symOf(st).(ir.Callee); ok {
-				res := u.fn.cur.Call(callee, args...)
+				res := u.callMaybeUnwind(callee, args...)
 				if out != (ir.Ptr{}) {
 					return out
 				}
@@ -1194,7 +1194,7 @@ func (u *unit) call(e *ast.CallExpr, t types.Type) ir.Value {
 			return nil
 		}
 	}
-	res := u.fn.cur.CallInd(p, u.namedFuncType("fnsig", sig), args...)
+	res := u.callIndMaybeUnwind(p, u.namedFuncType("fnsig", sig), args...)
 	if out != (ir.Ptr{}) {
 		return out
 	}

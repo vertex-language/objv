@@ -407,6 +407,37 @@ A braced initializer zeroes what it does not mention (§6.7.9p21), which is one
 `memset` rather than a store per hole — and is also what makes a partly
 designated initializer correct without tracking which slots were filled.
 
+## Exceptions
+
+`@try` is a region whose calls carry a second edge: every call inside one is an
+`invoke` (§G3) to the region's landing pad, and the pad is a switch over the
+selector the personality routine hands it. Each arm is a `@catch` body with
+`objc_begin_catch` and `objc_end_catch` around it, and the clause a pad
+declares is the type-info the personality matched against — `OBJC_EHTYPE_$_X`
+for a class, `OBJC_EHTYPE_id` for `@catch (id)`, and no type-info at all for
+`@catch (...)`.
+
+`@finally` is the hard part, because it runs on every way out — falling off
+the end, returning through, breaking out of a loop that crosses it, and
+unwinding past — and has to be one copy of the block rather than one per exit.
+So it is a block all of them reach, with a slot saying where to go afterwards
+and a `br_table` over the codes; a `return` parks its value in a second slot,
+because the return itself happens on the other side.
+
+The unwinding exit is clang's rather than C++'s. The pad's last clause is a
+catch-all, so the personality stops at this frame, `objc_begin_catch` takes the
+object, the block runs, and `objc_exception_rethrow` puts it back on its way —
+and that rethrow is an ordinary call, so a `@try` enclosing this one sees it as
+an `invoke`. A `cleanup` clause and a `resume` would be the C++ spelling and
+would be wrong twice over: `resume` hands control to the unwinder, which steps
+past this frame entirely, and a block every exit reaches is dominated by no pad,
+which is what §19.5 requires of `resume`'s operand.
+
+One thing ARC does not yet do here: a `__strong` local is not released on the
+path that unwinds past its scope. The releases are emitted on the paths out
+that lowering can see, and an unwind edge is not one of them — so an exception
+crossing a scope leaks what that scope held.
+
 ## Not yet lowered
 
 Each of these reports once, as an error, naming the construct rather than the
@@ -415,7 +446,7 @@ expression:
 | | |
 | --- | --- |
 | a struct in a variadic argument | legal C, but there is no declared parameter to hang `byval` on, so nothing states how it travels |
-| `@try` / `@catch` / `@finally` | needs every call inside the region to become an `invoke` with an unwind edge. `@throw` is lowered; the rest is not |
+| a `goto` out of a `@try` that has a `@finally` | the destination table holds any number of exits and a `break` reaches one through it, but a `goto`'s label may not be lowered yet, so how many `@finally` blocks stand between here and it is not known where the `goto` stands |
 | a bit-field instance variable | the runtime writes an ivar's offset in bytes, so packing several into one word means agreeing with clang about which bits each gets — a second layout question with the non-fragile ABI on the other side |
 | inline assembly | `ir` has an asm form; nothing maps constraints onto it yet |
 

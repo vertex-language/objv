@@ -133,6 +133,10 @@ type unit struct {
 	// one symbol.
 	classSyms map[string]ir.Symbol
 
+	// ehTypes are the type-info objects this unit defined, one per class it
+	// implements and something here catches. See try.go.
+	ehTypes map[string]ir.Symbol
+
 	// What the metadata pass will need: the classes and categories this
 	// unit implemented, the methods it compiled, and the lists the runtime
 	// scans.
@@ -245,6 +249,7 @@ func newUnit(src *token.File, file *ast.File, info *analyzer.Info, opt Options) 
 		cstrs:      map[string]ir.Symbol{},
 		externs:    map[string]*ir.FuncImport{},
 		classSyms:  map[string]ir.Symbol{},
+		ehTypes:    map[string]ir.Symbol{},
 		defines:    map[string]bool{},
 		definesVar: map[string]bool{},
 		omitted:    map[string]bool{},

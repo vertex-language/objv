@@ -67,8 +67,7 @@ func (u *unit) stmt(s ast.Stmt) {
 			return
 		}
 		if n := len(u.fn.breaks); n > 0 {
-			u.fn.cur.Br(u.fn.breaks[n-1].To())
-			u.fn.cur = nil
+			u.jumpOut(u.fn.breaks[n-1])
 		}
 
 	case *ast.ContinueStmt:
@@ -76,8 +75,7 @@ func (u *unit) stmt(s ast.Stmt) {
 			return
 		}
 		if n := len(u.fn.continues); n > 0 {
-			u.fn.cur.Br(u.fn.continues[n-1].To())
-			u.fn.cur = nil
+			u.jumpOut(u.fn.continues[n-1])
 		}
 
 	case *ast.LabeledStmt:
@@ -90,6 +88,14 @@ func (u *unit) stmt(s ast.Stmt) {
 
 	case *ast.GotoStmt:
 		if !u.at() {
+			return
+		}
+		if u.insideFinally(0) {
+			// The destination table can hold any number of exits, and a
+			// break reaches one through it. A goto cannot: its label may
+			// not be lowered yet, so how many @finally blocks stand
+			// between here and it is not known here. See try.go.
+			u.unsupported(s, "a goto out of a @try with a @finally")
 			return
 		}
 		u.fn.cur.Br(u.labelBlock(u.name(s.Label)).To())
@@ -108,7 +114,7 @@ func (u *unit) stmt(s ast.Stmt) {
 		u.throwStmt(s)
 
 	case *ast.TryStmt:
-		u.unsupported(s, "@try")
+		u.tryStmt(s)
 
 	case *ast.AsmStmt:
 		u.unsupported(s, "inline assembly")
@@ -234,11 +240,7 @@ func (u *unit) returnStmt(s *ast.ReturnStmt) {
 		return
 	}
 	if s.Result == nil {
-		u.releaseAllStrong()
-		u.releaseByrefs()
-		u.releasePools()
-		u.fn.cur.Return()
-		u.fn.cur = nil
+		u.finishReturn(nil)
 		return
 	}
 	if u.arcOn() && objectValued(u.fn.ret) {
@@ -257,11 +259,7 @@ func (u *unit) returnStmt(s *ast.ReturnStmt) {
 		v = u.convert(v, u.typeOf(s.Result), u.fn.ret)
 		v = u.returnObject(v, owned)
 		u.releaseTemps()
-		u.releaseAllStrong()
-		u.releaseByrefs()
-		u.releasePools()
-		u.fn.cur.Return(v)
-		u.fn.cur = nil
+		u.finishReturn(v)
 		return
 	}
 	v := u.rvalue(s.Result)
@@ -278,20 +276,12 @@ func (u *unit) returnStmt(s *ast.ReturnStmt) {
 			return
 		}
 		u.copyAggregate(u.fn.sret, src, u.fn.ret)
-		u.releaseAllStrong()
-		u.releaseByrefs()
-		u.releasePools()
-		u.fn.cur.Return()
-		u.fn.cur = nil
+		u.finishReturn(nil)
 		return
 	}
 	v = u.convert(v, u.typeOf(s.Result), u.fn.ret)
 	u.releaseTemps()
-	u.releaseAllStrong()
-	u.releaseByrefs()
-	u.releasePools()
-	u.fn.cur.Return(v)
-	u.fn.cur = nil
+	u.finishReturn(v)
 }
 
 func (u *unit) ifStmt(s *ast.IfStmt) {
@@ -395,8 +385,8 @@ func (u *unit) forStmt(s *ast.ForStmt) {
 
 // loop runs a loop body with its break and continue targets in force.
 func (u *unit) loop(brk, cont *ir.Block, body ast.Stmt) {
-	u.fn.breaks = append(u.fn.breaks, brk)
-	u.fn.continues = append(u.fn.continues, cont)
+	u.fn.breaks = append(u.fn.breaks, u.jumpTo(brk))
+	u.fn.continues = append(u.fn.continues, u.jumpTo(cont))
 	u.stmt(body)
 	u.fn.breaks = u.fn.breaks[:len(u.fn.breaks)-1]
 	u.fn.continues = u.fn.continues[:len(u.fn.continues)-1]
@@ -473,7 +463,7 @@ func (u *unit) switchStmt(s *ast.SwitchStmt) {
 	// a label inside an if or a loop is Duff's device. Every one of them is
 	// a target the branch chain above may jump to, so the blocks are looked
 	// up by label rather than walked for.
-	u.fn.breaks = append(u.fn.breaks, done)
+	u.fn.breaks = append(u.fn.breaks, u.jumpTo(done))
 	u.fn.cases = append(u.fn.cases, blocks)
 	u.fn.cur = nil
 	for _, item := range body.Items {

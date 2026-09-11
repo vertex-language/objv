@@ -66,6 +66,8 @@ func arm64Object(m *ir.Module, t Target, producer, dep string) ([]byte, error) {
 		err = arm64macho.Write(&buf, o, arm64macho.Options{
 			Platform: machocore.PlatformMacOS,
 			MinOS:    dep,
+			// The unwind tables need it: see the field's own comment.
+			Subsections: true,
 		})
 	case FormatELF:
 		err = arm64elf.Write(&buf, o, arm64elf.Options{Comment: producer})
@@ -89,8 +91,9 @@ func amd64Object(m *ir.Module, t Target, producer, dep string) ([]byte, error) {
 	switch t.format {
 	case FormatMachO:
 		err = amd64macho.Write(&buf, o, amd64macho.Options{
-			Platform: machocore.PlatformMacOS,
-			MinOS:    dep,
+			Platform:    machocore.PlatformMacOS,
+			MinOS:       dep,
+			Subsections: true,
 		})
 	case FormatELF:
 		err = amd64elf.Write(&buf, o, amd64elf.Options{Comment: producer})

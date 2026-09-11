@@ -20,9 +20,12 @@ type fnState struct {
 	// that a forward goto and its label meet.
 	labels map[string]*ir.Block
 
-	// breaks and continues are the innermost loop's or switch's targets.
-	breaks    []*ir.Block
-	continues []*ir.Block
+	// breaks and continues are the innermost loop's or switch's targets,
+	// each with the number of @try scopes that were open where it was
+	// made: leaving through one runs its @finally, and that is the count
+	// that says how many.
+	breaks    []jumpTarget
+	continues []jumpTarget
 
 	// cases is the block each open switch gave each of its labels. A label
 	// is not always at the top of the body, so it is found by lookup where
@@ -43,6 +46,18 @@ type fnState struct {
 	// @autoreleasepool blocks, innermost last.
 	pools []ir.Ptr
 
+	// tries are the open @try statements, innermost last, and handlers the
+	// pad block a call inside the region being lowered unwinds to. They are
+	// two stacks rather than one because they do not nest alike: a @try
+	// stays open across its own @catch and @finally bodies, and each of
+	// those has a pad of its own. See try.go.
+	tries    []*tryScope
+	handlers []*handler
+
+	// retSlot is where a return crossing a @finally parks its value while
+	// the block runs. One per function, made on first need.
+	retSlot ir.Ptr
+
 	// byrefs are the __block structures this function declared, which are
 	// handed back to the runtime on every path out. See byref.go.
 	byrefs []ir.Ptr
@@ -62,6 +77,13 @@ type fnState struct {
 	consumesSelf   bool
 
 	nblocks int
+}
+
+// A jumpTarget is where a break or a continue goes, and how deep in the
+// @try stack the statement that owns it stands.
+type jumpTarget struct {
+	blk   *ir.Block
+	tries int
 }
 
 // block makes a fresh block with a readable label.

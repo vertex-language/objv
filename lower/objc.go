@@ -195,7 +195,7 @@ func (u *unit) sendWith(recv ir.Value, super bool, sel string, args []ir.Value,
 	fnTy := u.sendType(sig)
 	imp := u.extern(name, ir.NewSig().Param(ir.TypePtr).Param(ir.TypePtr).Variadic().Ret(ir.TypePtr))
 	fp := u.fn.cur.Ptr.GetAddr(imp)
-	res := u.fn.cur.CallInd(fp, fnTy, all...)
+	res := u.callIndMaybeUnwind(fp, fnTy, all...)
 	if out != (ir.Ptr{}) {
 		return out
 	}
@@ -637,18 +637,23 @@ func (u *unit) synchronized(s *ast.SyncStmt) {
 	}
 }
 
-// throwStmt lowers `@throw obj;` (§7.2).
+// throwStmt lowers `@throw obj;` and the bare `@throw;` (§7.2).
 //
-// objc_exception_throw does not return, and the block has to end somewhere:
-// a trap says the path stops here without claiming the call fell through.
-// The bare `@throw;` re-raises the exception a @catch is holding, which
-// needs the @try lowering this package does not have yet.
+// Neither call returns, and the block has to end somewhere: a trap says the
+// path stops here without claiming the call fell through. The bare form
+// re-raises the object the @catch around it is holding, which is what the
+// runtime's rethrow does with no argument at all — objc_begin_catch already
+// told it which object that is.
+//
+// A throw inside a @try is a call with an unwind edge like any other: the
+// @catch clauses of the very @try it stands in are entitled to see it.
 func (u *unit) throwStmt(s *ast.ThrowStmt) {
 	if !u.at() {
 		return
 	}
 	if s.X == nil {
-		u.unsupported(s, "a bare @throw outside a @catch")
+		u.callMaybeUnwind(u.extern(runtime.ExceptionRethrow, ir.NewSig()))
+		u.endThrow()
 		return
 	}
 	v := u.rvalue(s.X)
@@ -657,7 +662,17 @@ func (u *unit) throwStmt(s *ast.ThrowStmt) {
 		return
 	}
 	throw := u.extern(runtime.ExceptionThrow, ir.NewSig().Param(ir.TypePtr))
-	u.fn.cur.Call(throw, p)
+	u.callMaybeUnwind(throw, p)
+	u.endThrow()
+}
+
+// endThrow closes the path a throw left open. With a handler in scope the
+// call was an invoke, so lowering is now in its normal edge — a block
+// nothing reaches, which still has to end.
+func (u *unit) endThrow() {
+	if !u.at() {
+		return
+	}
 	u.fn.cur.Trap()
 	u.fn.cur = nil
 }

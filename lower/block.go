@@ -641,7 +641,7 @@ func (u *unit) callBlock(e *ast.CallExpr, bt *types.Block) ir.Value {
 		isig.Ret(r)
 		hasRet = true
 	}
-	res := b.CallInd(invoke, u.namedFuncType("blocksig", isig), args...)
+	res := u.callIndMaybeUnwind(invoke, u.namedFuncType("blocksig", isig), args...)
 	if out != (ir.Ptr{}) {
 		return out
 	}

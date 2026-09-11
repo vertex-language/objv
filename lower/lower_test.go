@@ -200,15 +200,14 @@ void call(void) { twice(); [K make]; }
 // the construct rather than the expression.
 func TestUnsupportedIsReportedOncePerConstruct(t *testing.T) {
 	_, diags := build(t, `
-__attribute__((objc_root_class)) @interface K @end
 void f(void) {
-    @try { } @catch (id e) { }
-    @try { } @catch (id e) { }
+    __asm__("nop");
+    __asm__("nop");
 }
 `)
 	n := 0
 	for _, d := range diags {
-		if strings.Contains(d.Message, "@try") {
+		if strings.Contains(d.Message, "inline assembly") {
 			n++
 		}
 	}

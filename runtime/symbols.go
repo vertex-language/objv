@@ -22,6 +22,15 @@ package runtime
 // at.
 func ClassSymbol(class string) string { return "OBJC_CLASS_$_" + class }
 
+// EHTypeSymbol is a class's type-info object: three words the personality
+// reads to decide whether a thrown object is one of these.
+//
+// It exists for a class only where something catches it, and it is global
+// rather than local because the @catch may be in another image than the
+// @implementation — which is why it is a symbol with the class's name in it
+// rather than an anonymous constant.
+func EHTypeSymbol(class string) string { return "OBJC_EHTYPE_$_" + class }
+
 // MetaclassSymbol is the metaclass object, which holds the class methods.
 // The metaclass of a root class is its own isa, which is what closes the
 // chain.
@@ -245,6 +254,32 @@ const (
 	ExceptionRethrow = "objc_exception_rethrow"
 	SyncEnter        = "objc_sync_enter"
 	SyncExit         = "objc_sync_exit"
+
+	// Personality is the routine the unwinder runs for a frame with a
+	// @try in it. It reads the same Itanium-ABI tables a C++ frame's
+	// personality does; what makes it Objective-C's is how it compares a
+	// thrown object against the type-info a @catch names.
+	Personality = "__objc_personality_v0"
+
+	// BeginCatch hands a @catch its object and makes it the exception
+	// being handled; EndCatch says the clause is done with it.
+	//
+	//	id objc_begin_catch(void *exn);
+	//	void objc_end_catch(void);
+	BeginCatch = "objc_begin_catch"
+	EndCatch   = "objc_end_catch"
+
+	// EHTypeVTable is the vtable every type-info object points at, and the
+	// pointer is to its third word rather than to its first: the layout is
+	// Itanium's, whose vtable pointer names the first virtual function and
+	// not the header two words above it.
+	EHTypeVTable       = "objc_ehtype_vtable"
+	EHTypeVTableOffset = 16
+
+	// EHTypeID is the type-info `@catch (id)` names — the one that matches
+	// any Objective-C object. A `@catch (...)` names nothing at all, which
+	// the table spells as a null type-info.
+	EHTypeID = "OBJC_EHTYPE_id"
 
 	// Fast enumeration (§7.1) is a method, not a function: the loop sends
 	// this selector to the collection.

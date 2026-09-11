@@ -260,3 +260,16 @@ var FastEnumerationState = []Field{
 // the compiler's choice and not the runtime's: the buffer is the loop's, and
 // sixteen is what clang picks.
 const FastEnumerationBatch = 16
+
+// EHType is the type-info object a @catch names: Itanium's layout, with the
+// class hanging off the end of it.
+//
+// The vtable pointer is the odd field. Itanium's points at the first virtual
+// function rather than at the two-word header above it, so what goes here is
+// objc_ehtype_vtable plus EHTypeVTableOffset — the runtime's own object has
+// the same shape and the personality reads both through the same code.
+var EHType = []Field{
+	{Ptr, "vtable"},
+	{Ptr, "name"},
+	{Ptr, "cls"},
+}
