@@ -36,13 +36,6 @@ func (u *unit) synthesizeAccessors(k *types.Class, written map[string]bool) {
 		if p.Ivar == "" || p.Dynamic || p.Has(types.PropClass) {
 			continue
 		}
-		if p.Has(types.PropWeak) {
-			// A weak property's accessors are objc_loadWeakRetained and
-			// objc_storeWeak, which are the weak machinery rather than the
-			// property machinery, and lower does not emit it yet.
-			u.unsupported(nil, "a synthesized accessor for the weak property '"+p.Name+"'")
-			continue
-		}
 		if !written[p.Getter] {
 			u.synthesizeGetter(k, p)
 		}
@@ -116,6 +109,17 @@ func (u *unit) synthesizeGetter(k *types.Class, p *types.Property) {
 	b := u.fn.cur
 
 	off := u.ivarOffset(k, p.Ivar)
+	if u.isWeak(p.Type) {
+		// A weak getter reads through the runtime, which hands back a value
+		// it has autoreleased — the object may go away between the read and
+		// the caller's use, and only the runtime knows.
+		v := u.loadWeak(b.Ptr.Add(self, off))
+		if v == nil {
+			return
+		}
+		b.Return(v)
+		return
+	}
 	if u.atomicObject(p) {
 		sig := ir.NewSig()
 		sig.Param(ir.TypePtr)
@@ -149,6 +153,11 @@ func (u *unit) synthesizeSetter(k *types.Class, p *types.Property) {
 	b := u.fn.cur
 
 	off := u.ivarOffset(k, p.Ivar)
+	if u.isWeak(p.Type) {
+		u.storeWeak(b.Ptr.Add(self, off), val)
+		b.Return()
+		return
+	}
 	if copies, owns := u.ownsValue(p); owns {
 		sig := ir.NewSig()
 		sig.Param(ir.TypePtr)

@@ -22,16 +22,22 @@ func (u *unit) stmt(s ast.Stmt) {
 	switch s := s.(type) {
 	case *ast.CompoundStmt:
 		u.push()
+		u.pushARCScope()
 		for _, item := range s.Items {
 			u.stmt(item)
 		}
+		u.popARCScope()
 		u.pop()
 
 	case *ast.DeclStmt:
 		u.localDecl(s.D)
+		u.releaseTemps()
 
 	case *ast.ExprStmt:
 		u.rvalue(s.X)
+		// §7.4: an object the statement produced and nothing took is
+		// released where the statement ends. See arc.go.
+		u.releaseTemps()
 
 	case *ast.EmptyStmt, *ast.BadStmt:
 
@@ -151,6 +157,32 @@ func (u *unit) localDecl(d ast.Decl) {
 			u.bind(name, &storage{kind: stGlobal, typ: t, sym: sym})
 			continue
 		}
+		if u.isWeak(t) && sp.storage != token.STATIC && sp.storage != token.EXTERN && !sp.block {
+			// A weak local is registered with the runtime where it comes
+			// into being and unregistered where its scope ends. See arc.go.
+			slot := u.slot(t, name)
+			u.bind(name, &storage{kind: stLocal, typ: t, addr: slot})
+			u.noteWeakLocal(slot, t)
+			var v ir.Value
+			if it.Init != nil {
+				v = u.convert(u.rvalue(it.Init), u.typeOf(it.Init), t)
+			}
+			u.initWeak(slot, v)
+			continue
+		}
+		if u.isStrong(t) && sp.storage != token.STATIC && sp.storage != token.EXTERN && !sp.block {
+			// §5.6: a __strong local owns what it holds, from here to the
+			// end of its scope.
+			slot := u.slot(t, name)
+			u.bind(name, &storage{kind: stLocal, typ: t, addr: slot})
+			u.noteStrongLocal(slot, t)
+			if it.Init != nil {
+				u.initStrong(slot, t, it.Init)
+			} else {
+				u.storeTo(slot, u.fn.cur.Ptr.Const(), t)
+			}
+			continue
+		}
 		if sp.block {
 			// §6.9's __block: the variable lives in a structure the frame
 			// and every block that captured it both point at, so that they
@@ -202,9 +234,33 @@ func (u *unit) returnStmt(s *ast.ReturnStmt) {
 		return
 	}
 	if s.Result == nil {
+		u.releaseAllStrong()
 		u.releaseByrefs()
 		u.releasePools()
 		u.fn.cur.Return()
+		u.fn.cur = nil
+		return
+	}
+	if u.arcOn() && objectValued(u.fn.ret) {
+		// §ARC's calling convention: a method in one of the retaining
+		// families returns +1 and every other returns +0, and this frame is
+		// about to release everything it holds. See arc.go.
+		v, owned := u.rvalueOwned(s.Result)
+		if v == nil {
+			return
+		}
+		// `return self` in an initializer hands back the +1 the method was
+		// called with and took ownership of. There is nothing to retain:
+		// the ownership is already this frame's, and returning it is what
+		// gives it away. See arc.go.
+		owned = owned || u.returningConsumedSelf(s.Result)
+		v = u.convert(v, u.typeOf(s.Result), u.fn.ret)
+		v = u.returnObject(v, owned)
+		u.releaseTemps()
+		u.releaseAllStrong()
+		u.releaseByrefs()
+		u.releasePools()
+		u.fn.cur.Return(v)
 		u.fn.cur = nil
 		return
 	}
@@ -222,6 +278,7 @@ func (u *unit) returnStmt(s *ast.ReturnStmt) {
 			return
 		}
 		u.copyAggregate(u.fn.sret, src, u.fn.ret)
+		u.releaseAllStrong()
 		u.releaseByrefs()
 		u.releasePools()
 		u.fn.cur.Return()
@@ -229,6 +286,8 @@ func (u *unit) returnStmt(s *ast.ReturnStmt) {
 		return
 	}
 	v = u.convert(v, u.typeOf(s.Result), u.fn.ret)
+	u.releaseTemps()
+	u.releaseAllStrong()
 	u.releaseByrefs()
 	u.releasePools()
 	u.fn.cur.Return(v)

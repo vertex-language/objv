@@ -409,13 +409,6 @@ func (c *checker) recordType(st *ast.StructType) types.Type {
 					c.report(d, "member has incomplete type "+t.String())
 				}
 			}
-			if types.IsObjCObject(t) && c.arc() {
-				// An object pointer in a struct is a field ARC cannot
-				// manage: there is no place to run a release, because a
-				// struct has no destructor.
-				c.report(d, "ARC forbids an object pointer '"+t.String()+
-					"' in a struct; use __unsafe_unretained or a class")
-			}
 			c.info.Types[d] = t
 			rec.Fields = append(rec.Fields, fld)
 		}

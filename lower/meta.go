@@ -44,6 +44,7 @@ func (u *unit) defineImpl(class, category string, members []ast.Decl) {
 		// here, and a class that does not emit them publishes selectors the
 		// runtime cannot find.
 		u.synthesizeAccessors(k, written)
+		u.emitCxxDestruct(k)
 		u.impls = append(u.impls, k)
 	} else {
 		u.categories = append(u.categories, categoryImpl{class: k, name: category})
@@ -104,7 +105,11 @@ func (u *unit) defineMethod(k *types.Class, category string, m *ast.MethodDecl) 
 	}
 
 	u.methodFns = append(u.methodFns, methodFn{class: k, category: category, sig: sig, fn: fn})
-	u.buildBody(fn, ft, names, m.Body, k)
+	// §ARC ends -dealloc with a call to the superclass's, which the program
+	// may not write and must have: see arcSuperDealloc.
+	u.deallocating = !sig.Class && sig.Sel == "dealloc"
+	u.buildBody(fn, ft, names, m.Body, k, runtime.FamilyOf(sig.Sel))
+	u.deallocating = false
 }
 
 // methodOf finds the analyzed signature for a definition.
@@ -167,6 +172,12 @@ func (u *unit) emitClass(k *types.Class) {
 
 	// The metaclass first: its read-only half holds the class methods, and
 	// its instance size is the size of a class object.
+	// Whether this class emitted a .cxx_destruct, which is the only way the
+	// runtime knows to call one: objc4 checks the flag before it looks the
+	// selector up, so a destructor with the bit clear is a method nothing
+	// ever calls and a class that leaks everything it holds.
+	dtor := u.hasCxxDestruct[k]
+
 	metaFlags := runtime.ClassFlags(true, k.Root, u.arc, false, false)
 	clsSize := uint32(u.abi.SizeOf(runtime.Class))
 	// The conformance list, which is the same object in both halves: a
@@ -176,7 +187,7 @@ func (u *unit) emitClass(k *types.Class) {
 	metaRO := u.emitClassRO(runtime.MetaclassROSymbol(k.Name), uint32(metaFlags),
 		clsSize, clsSize, name, classMethods, protocols, nil, nil)
 
-	flags := runtime.ClassFlags(false, k.Root, u.arc, false, false)
+	flags := runtime.ClassFlags(false, k.Root, u.arc, dtor, false)
 	ro := u.emitClassRO(runtime.ClassROSymbol(k.Name), uint32(flags),
 		start, size, name, instMethods, protocols, ivars, props)
 

@@ -19,6 +19,12 @@ import (
 // which is what a struct assignment copies and what a struct argument passes.
 // Nil comes back for one, and the caller works with the pointer instead.
 func (u *unit) loadFrom(p ir.Ptr, t types.Type) ir.Value {
+	// A weak reference is not read by loading it: the object may be
+	// deallocated between the read and the use, and only the runtime knows.
+	// See arc.go.
+	if u.isWeak(t) && u.arcOn() {
+		return u.loadWeak(p)
+	}
 	if isAggregate(t) {
 		return nil
 	}
@@ -77,6 +83,12 @@ func (u *unit) loadFrom(p ir.Ptr, t types.Type) ir.Value {
 // storeTo writes a value of t to an address.
 func (u *unit) storeTo(p ir.Ptr, v ir.Value, t types.Type) {
 	if v == nil {
+		return
+	}
+	// And not written by storing: the runtime keeps the table that makes it
+	// go to nil.
+	if u.isWeak(t) && u.arcOn() {
+		u.storeWeak(p, v)
 		return
 	}
 	b := u.fn.cur

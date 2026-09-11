@@ -20,6 +20,10 @@
 }
 @end
 
+// An object pointer in a struct is allowed: early ARC forbade it, and clang
+// has admitted it since objc_arc_fields, which objv claims. What the field
+// costs is a struct whose copies and destruction the compiler has to manage,
+// which lower does not do yet and which lower/README.md says.
 struct Holder {
-    NSObject *object;               // expect: ARC forbids an object pointer
+    NSObject *object;
 };

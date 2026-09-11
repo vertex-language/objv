@@ -909,6 +909,22 @@ func (u *unit) assign(e *ast.AssignExpr, t types.Type) ir.Value {
 			}
 			return *addr
 		}
+		// Under ARC an assignment is where ownership changes: a __strong
+		// location lets go of what it held and takes what it is given, and
+		// `self = [super init]` in an initializer takes the +1 its
+		// superclass produced rather than releasing it. See arc.go.
+		if u.arcOn() && (u.isStrong(at) || u.consumingSelf(e.Lhs)) {
+			v, owned := u.rvalueOwned(e.Rhs)
+			if v == nil {
+				return nil
+			}
+			v = u.convert(v, u.typeOf(e.Rhs), at)
+			if !u.isStrong(at) {
+				u.storeTo(*addr, v, at) // self, consumed
+				return v
+			}
+			return u.storeStrong(*addr, at, v, owned)
+		}
 		v := u.rvalue(e.Rhs)
 		if v == nil {
 			return nil

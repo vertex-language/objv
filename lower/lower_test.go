@@ -27,7 +27,6 @@ func build(t *testing.T, src string, opts ...func(*lower.Options)) (string, []to
 	for _, d := range diags {
 		t.Fatalf("parse: %s", d.Print(f))
 	}
-	info, _ := analyzer.Check(f, file, types.LP64(), 0)
 	opt := lower.Options{
 		Name: "t", Target: ir.AArch64MacOS, Model: types.LP64(),
 		ABI: runtime.Darwin64(), Arch: runtime.ARM64, SymbolPrefix: "_",
@@ -35,6 +34,14 @@ func build(t *testing.T, src string, opts ...func(*lower.Options)) (string, []to
 	for _, o := range opts {
 		o(&opt)
 	}
+	// The analyzer runs in the mode lower will: ARC's ownership is what
+	// analysis inferred, and lowering it against a tree analyzed without it
+	// would be lowering something nobody checked.
+	var mode analyzer.Mode
+	if opt.ARC {
+		mode |= analyzer.ARC
+	}
+	info, _ := analyzer.Check(f, file, types.LP64(), mode)
 	mod, lds := lower.Lower(f, file, info, opt)
 	out, err := text.Format(mod)
 	if err != nil {
@@ -276,5 +283,111 @@ func TestTentativeDefinition(t *testing.T) {
 	mustContain(t, out, "global rw @_a")
 	if strings.Contains(out, "import global @_a") {
 		t.Error("a tentative definition was imported")
+	}
+}
+
+// ---- automatic reference counting ----
+
+// arc lowers a snippet with ARC on, in both phases.
+func arcBuild(t *testing.T, src string) string {
+	t.Helper()
+	out, diags := build(t, arcPrelude+src, func(o *lower.Options) { o.ARC = true })
+	for _, d := range diags {
+		t.Errorf("%s", d.Message)
+	}
+	return out
+}
+
+const arcPrelude = `
+__attribute__((objc_root_class)) @interface NSObject
+- (instancetype)init;
++ (instancetype)alloc;
+- (id)copy;
+@end
+@interface NSString : NSObject
++ (instancetype)stringWithUTF8String:(const char *)s;
+@end
+`
+
+// §5.6's default: a local that holds an object keeps it alive for as long as
+// it is in scope, and lets it go where the scope ends.
+func TestARCStrongLocal(t *testing.T) {
+	out := arcBuild(t, `
+	void f(void) {
+		NSString *s = [NSString stringWithUTF8String:"x"];
+		(void)s;
+	}`)
+	mustContain(t, out, "call @_objc_retain", "call @_objc_release")
+}
+
+// A method in one of the retaining families hands back an object the caller
+// owns, so `[[NSObject alloc] init]` is one +1 and not two: init consumes the
+// receiver it was given. Nothing retains it, and the variable's scope
+// releases it once.
+func TestARCAllocInitIsOneRetain(t *testing.T) {
+	out := arcBuild(t, `
+	void f(void) {
+		NSObject *o = [[NSObject alloc] init];
+		(void)o;
+	}`)
+	if n := strings.Count(out, "call @_objc_retain("); n != 0 {
+		t.Errorf("%d retains for an alloc/init, want none\n%s", n, out)
+	}
+	if n := strings.Count(out, "call @_objc_release("); n != 1 {
+		t.Errorf("%d releases, want one\n%s", n, out)
+	}
+}
+
+// An object the statement produced at +1 and nothing took is released where
+// the statement ends.
+func TestARCUnusedTemporaryIsReleased(t *testing.T) {
+	out := arcBuild(t, `
+	void use(NSObject *o);
+	void f(void) { use([[NSObject alloc] init]); }`)
+	mustContain(t, out, "call @_objc_release")
+}
+
+// `self = [super init]` takes the +1 its superclass produced rather than
+// releasing it, and `return self` hands that same one back.
+func TestARCInitializerTransfersSelf(t *testing.T) {
+	out := arcBuild(t, `
+	@interface Box : NSObject
+	@end
+	@implementation Box
+	- (instancetype)init { self = [super init]; return self; }
+	@end`)
+	if strings.Contains(out, "call @_objc_release") {
+		t.Errorf("an initializer released the object it was handed\n%s", out)
+	}
+	if strings.Contains(out, "call @_objc_retain(") {
+		t.Errorf("an initializer retained what it already owned\n%s", out)
+	}
+}
+
+// A class with __strong instance variables owes the runtime a destructor,
+// and the flag word has to say so: objc4 checks the flag before it looks the
+// selector up.
+func TestARCCxxDestruct(t *testing.T) {
+	out := arcBuild(t, `
+	@interface Box : NSObject { NSObject *_held; }
+	@end
+	@implementation Box
+	@end`)
+	mustContain(t, out, "@__i_Box__$cxx_destruct", "call @_objc_storeStrong")
+	// RO_HAS_CXX_STRUCTORS | RO_IS_ARC | RO_HAS_CXX_DTOR_ONLY.
+	mustContain(t, out, "{ 388,")
+}
+
+// Without ARC none of it is emitted: the ownership is the program's.
+func TestNoARCEmitsNothing(t *testing.T) {
+	out, _ := build(t, arcPrelude+`
+	void f(void) {
+		NSObject *o = [[NSObject alloc] init];
+		(void)o;
+	}`)
+	for _, call := range []string{"objc_retain", "objc_release", "objc_storeStrong"} {
+		if strings.Contains(out, call) {
+			t.Errorf("manual reference counting emitted %s\n%s", call, out)
+		}
 	}
 }

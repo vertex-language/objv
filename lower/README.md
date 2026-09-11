@@ -115,6 +115,61 @@ same function, with a fallback that reads SystemVersion.plist on systems too
 old to have it. objv links libSystem and not compiler-rt, and its Darwin
 deployment floor is above that fallback's range.
 
+## Automatic reference counting
+
+ARC is not a garbage collector and not a rewrite. It is a set of rules about
+where *ownership* changes, and every call `arc.go` places is at a point where
+it does. The analyzer decided the ownership — every object variable has a
+lifetime, most programs write none, and §5.6's default is `__strong` — and
+this places the operations that keep it true.
+
+Two facts do all the work.
+
+The first is that an object rvalue is either **owned** — the expression
+produced it at +1, and somebody has to release it — or **borrowed**, valid
+only for as long as whatever holds it holds it. Which one is decided by the
+selector's *name*, and the naming convention is normative: `alloc`, `copy`,
+`init`, `mutableCopy` and `new` return an object the caller owns, and every
+other method returns one it does not. `runtime.FamilyOf` is that rule, corners
+included — `newlineCharacterSet` is not in the `new` family, because the word
+is "newline".
+
+The second is that an owned value nobody takes has to be released at the end
+of the full expression. So every owned value is registered as it is produced,
+and a context that *takes* ownership — initializing a `__strong` variable,
+assigning to one, returning from a method that returns +1 — takes it back off
+the register instead. What is left at the end of the statement is what nothing
+wanted.
+
+That is the whole mechanism. `[[Box alloc] init]` registers alloc's +1, `init`
+consumes its receiver and registers its own, and the declaration it
+initializes takes that one — so the object is retained once, by the variable,
+and released once, when the variable goes out of scope.
+
+Three things follow that are easy to miss and fatal to omit:
+
+- `self = [super init]` **takes** the +1 rather than replacing one, and
+  `return self` hands back that same +1. Retaining it again leaves a count
+  nothing brings down; releasing it frees the object being initialized.
+- A class with `__strong` or `__weak` instance variables owes a
+  `.cxx_destruct`, and the class's flag word has to say so — objc4 checks
+  `RO_HAS_CXX_STRUCTORS` before it looks the selector up, so a destructor
+  with the bit clear is a method nothing calls.
+- A user-written `-dealloc` ends with `[super dealloc]`, which ARC inserts
+  and forbids the program to write. Without it the override never reaches
+  `object_dispose`, `.cxx_destruct` never runs, and everything the object
+  holds leaks while the program looks like it worked.
+
+`__weak` is four runtime calls and no stores: the runtime keeps a side table
+of every weak reference to an object and walks it during dealloc, which is
+what makes the reference go to nil. `loadFrom` and `storeTo` are the choke
+points — a weak reference is never read by loading it.
+
+What is not here: the optimizations clang applies to pairs it can prove
+redundant, which cost instructions and not correctness; `objc_retainBlock` on
+a block assigned to a `__strong` variable; and the release of a `__strong`
+local left by a `goto` out of its scope, which leaks.
+
 ## Where the allocations go
 
 The entry block holds `ptr.alloc` and nothing else, and the body goes in a

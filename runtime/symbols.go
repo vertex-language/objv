@@ -222,6 +222,13 @@ const (
 	DestroyWeak                   = "objc_destroyWeak"
 	CopyWeak                      = "objc_copyWeak"
 
+	// CxxDestructSelector is the method objc4 looks up on a class as it
+	// deallocates an object, and calls if it is there. C++ named the hook
+	// and Objective-C borrowed it, because the question is the same one: an
+	// object is going away and its members have to be let go. No program
+	// can write the name, which is what makes it safe to own.
+	CxxDestructSelector = ".cxx_destruct"
+
 	AutoreleasePoolPush = "objc_autoreleasePoolPush"
 	AutoreleasePoolPop  = "objc_autoreleasePoolPop"
 

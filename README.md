@@ -122,7 +122,7 @@ Objective-C is fundamentally dynamic: message dispatches and metadata structures
 - **Message sends:** Lowering `[receiver selector:arg]` into runtime dispatches (`objc_msgSend`). Specialised return variants (`objc_msgSend_stret`, `objc_msgSend_fpret`) are selected based on target ABI requirements.
 - **Class and metaclass metadata:** Emission of `_OBJC_CLASS_$_*` and `_OBJC_METACLASS_$_*` structures, method lists, ivar offsets, protocol reference tables, and property attributes.
 - **Runtime sections:** Dedicated Mach-O and ELF section placement for runtime consumption (`__objc_classlist`, `__objc_catlist`, `__objc_protolist`, `__objc_classrefs`, `__objc_selrefs`).
-- **ARC lowering:** Static ownership analysis placed directly at the VIR lowering stage, balancing retain/release calls and autorelease pool boundaries prior to instruction selection.
+- **ARC lowering:** Static ownership analysis placed directly at the VIR lowering stage, balancing retain/release calls and autorelease pool boundaries prior to instruction selection. Ownership follows the selector naming convention — `alloc`, `copy`, `init`, `mutableCopy` and `new` return +1 — and a class with managed instance variables gets the `.cxx_destruct` the runtime calls. `__weak` is the runtime's side table, not a store.
 
 ---
 

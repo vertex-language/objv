@@ -66,7 +66,22 @@ func (u *unit) message(e *ast.MessageExpr, t types.Type) ir.Value {
 		ret = m.Ret
 	}
 	variadic := m != nil && m.Variadic
-	return u.sendWith(*recv, super, sel, args, params, variadic, ret, e)
+	v := u.sendWith(*recv, super, sel, args, params, variadic, ret, e)
+
+	// §ARC's naming convention, applied. A method in one of the retaining
+	// families hands back an object the caller owns, and init hands back
+	// the one it was given — which is why `[[Box alloc] init]` is one +1
+	// and not two. runtime.FamilyOf is the rule; arc.go is the register.
+	if u.arcOn() {
+		fam := runtime.FamilyOf(sel)
+		if fam.ConsumesSelf() {
+			u.takeOwned(*recv)
+		}
+		if fam.ReturnsRetained() && objectValued(ret) {
+			u.owns(v)
+		}
+	}
+	return v
 }
 
 // send emits one message: the call every Objective-C construct that means a

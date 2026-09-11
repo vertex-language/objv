@@ -626,3 +626,38 @@ func TestBlockByrefLayout(t *testing.T) {
 		t.Errorf("byref helper flag = %d, want 131", got)
 	}
 }
+
+// ARC has no annotations on the framework methods it calls; it has a naming
+// convention, and the convention is normative. The corners are what make it
+// a rule rather than a prefix test.
+func TestSelectorFamily(t *testing.T) {
+	for _, c := range []struct {
+		sel  string
+		want runtime.Family
+	}{
+		{"alloc", runtime.FamilyAlloc},
+		{"allocWithZone:", runtime.FamilyAlloc},
+		{"init", runtime.FamilyInit},
+		{"initWithFrame:", runtime.FamilyInit},
+		{"copy", runtime.FamilyCopy},
+		{"copyWithZone:", runtime.FamilyCopy},
+		{"mutableCopy", runtime.FamilyMutableCopy},
+		{"new", runtime.FamilyNew},
+		{"newValue", runtime.FamilyNew},
+		{"_init", runtime.FamilyInit},
+		{"__copy", runtime.FamilyCopy},
+
+		// The word is what counts, and a lowercase letter continues it.
+		{"newlineCharacterSet", runtime.FamilyNone},
+		{"initialize", runtime.FamilyNone},
+		{"copying", runtime.FamilyNone},
+		{"allocation", runtime.FamilyNone},
+		{"description", runtime.FamilyNone},
+		{"stringWithFormat:", runtime.FamilyNone},
+		{"", runtime.FamilyNone},
+	} {
+		if got := runtime.FamilyOf(c.sel); got != c.want {
+			t.Errorf("FamilyOf(%q) = %v, want %v", c.sel, got, c.want)
+		}
+	}
+}

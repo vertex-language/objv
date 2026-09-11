@@ -159,6 +159,15 @@ type unit struct {
 	// in the used set.
 	omitted map[string]bool
 
+	// deallocating marks the -dealloc being lowered, which ARC ends with a
+	// call to the superclass's.
+	deallocating bool
+
+	// hasCxxDestruct is the classes that emitted one, which the class's flag
+	// word has to say: the runtime checks the flag before it looks the
+	// selector up.
+	hasCxxDestruct map[*types.Class]bool
+
 	// byrefHelpers are the helper functions a __block variable's structure
 	// carries, interned by name: one helper serves every structure with an
 	// object at the same offset.
@@ -240,7 +249,8 @@ func newUnit(src *token.File, file *ast.File, info *analyzer.Info, opt Options) 
 		definesVar: map[string]bool{},
 		omitted:    map[string]bool{},
 
-		byrefHelpers: map[string]ir.Symbol{},
+		byrefHelpers:   map[string]ir.Symbol{},
+		hasCxxDestruct: map[*types.Class]bool{},
 
 		undescribed: map[string]string{},
 		ivarSyms:    map[string]ir.Symbol{},

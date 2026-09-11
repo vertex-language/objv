@@ -3,6 +3,7 @@ package lower
 import (
 	"github.com/vertex-language/ir"
 	"github.com/vertex-language/objv/ast"
+	"github.com/vertex-language/objv/runtime"
 	"github.com/vertex-language/objv/token"
 	"github.com/vertex-language/objv/types"
 )
@@ -45,6 +46,20 @@ type fnState struct {
 	// byrefs are the __block structures this function declared, which are
 	// handed back to the runtime on every path out. See byref.go.
 	byrefs []ir.Ptr
+
+	// temps are the objects the full expression being lowered produced at
+	// +1 and nothing has claimed. See arc.go.
+	temps []ir.Value
+
+	// strongs are the __strong locals in scope, innermost scope last, each
+	// released where its scope ends.
+	strongs [][]strongLocal
+
+	// retainedReturn says this method returns +1, and consumesSelf that it
+	// takes ownership of its receiver. Both are what the selector's family
+	// says; only an init method does the second.
+	retainedReturn bool
+	consumesSelf   bool
 
 	nblocks int
 }
@@ -401,7 +416,7 @@ func (u *unit) defineFunc(d *ast.FuncDecl) {
 	}
 	u.top.names[name] = &storage{kind: stFunc, typ: t, sym: fn}
 
-	u.buildBody(fn, ft, paramNames(d), d.Body, nil)
+	u.buildBody(fn, ft, paramNames(d), d.Body, nil, runtime.FamilyNone)
 }
 
 // notEmitted reports whether a definition this unit read is one it does not
@@ -485,10 +500,15 @@ func declName(d ast.Declarator) *ast.Ident {
 // bound in the scope — which is why a method does not get a lowering of its
 // own.
 func (u *unit) buildBody(fn *ir.Func, ft *types.Func, names []*ast.Ident,
-	stmts *ast.CompoundStmt, self *types.Class) {
+	stmts *ast.CompoundStmt, self *types.Class, fam runtime.Family) {
 
 	prev := u.fn
-	u.fn = &fnState{fn: fn, ret: ft.Ret, labels: map[string]*ir.Block{}, class: self}
+	u.fn = &fnState{fn: fn, ret: ft.Ret, labels: map[string]*ir.Block{}, class: self,
+		// What the selector's name promises about what this method returns
+		// and what it does with its receiver. See arc.go.
+		retainedReturn: u.arc && fam.ReturnsRetained(),
+		consumesSelf:   u.arc && fam.ConsumesSelf(),
+	}
 	leave := u.enterFunc(fn)
 	u.push()
 	defer func() {
@@ -608,6 +628,10 @@ func (u *unit) buildBody(fn *ir.Func, ft *types.Func, names []*ast.Ident,
 	// analyzer, and a trap is what a program that reaches here does.
 	if u.at() {
 		if types.IsVoid(ft.Ret) {
+			u.releaseAllStrong()
+			if fam == runtime.FamilyNone && self != nil && u.deallocating {
+				u.arcSuperDealloc(self)
+			}
 			u.releaseByrefs()
 			u.fn.cur.Return()
 		} else {
