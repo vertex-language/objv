@@ -359,7 +359,6 @@ expression:
 
 | | |
 | --- | --- |
-| a block capturing a struct by value, and `__block` on one | a memcpy into the literal and one back out |
 | a struct in a variadic argument | legal C, but there is no declared parameter to hang `byval` on, so nothing states how it travels |
 | `@try` / `@catch` / `@finally` | needs every call inside the region to become an `invoke` with an unwind edge. `@throw` is lowered; the rest is not |
 | a bit-field instance variable | the runtime writes an ivar's offset in bytes, so packing several into one word means agreeing with clang about which bits each gets — a second layout question with the non-fragile ABI on the other side |

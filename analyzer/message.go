@@ -36,7 +36,28 @@ func (c *checker) messageType(e *ast.MessageExpr) types.Type {
 		c.report(e, "'"+sel+"' is unavailable on '"+m.Owner+"'")
 	}
 	c.checkSendArgs(e, m, args)
-	return c.substInstancetype(c.substTypeArgs(m.Ret, recv), recv)
+
+	// §5.4's instancetype is the *receiver's* type, and `super` is not a
+	// receiver: it is self with the lookup starting one class higher. So
+	// `self = [super init]` in Node gives a Node, which is the whole reason
+	// every initializer in every Objective-C program is written that way.
+	subst := recv
+	if super {
+		subst = c.selfType()
+	}
+	return c.substInstancetype(c.substTypeArgs(m.Ret, recv), subst)
+}
+
+// selfType is the type `self` has in the method being checked: the class for
+// an instance method, its class object for a class method.
+func (c *checker) selfType() types.Type {
+	if c.self == nil {
+		return nil
+	}
+	if c.meth != nil && c.meth.Class {
+		return c.classObjectType(c.self)
+	}
+	return types.NewObject(c.self)
 }
 
 // receiverType types the receiver and says whether it was `super`.

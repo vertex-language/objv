@@ -565,3 +565,32 @@ func TestClassAdoptsProtocolOfItsOwnName(t *testing.T) {
 	@end
 	int f(Same *s) { return [s fromSame]; }`)
 }
+
+// §5.4's instancetype is the receiver's type, and `super` is not a receiver:
+// it is self with the lookup starting one class higher. So `self = [super
+// init]` in a subclass gives the subclass, which is the whole reason every
+// initializer in every Objective-C program is written that way.
+func TestSuperInstancetypeIsTheSubclass(t *testing.T) {
+	_, file, info := clean(t, 0, `
+	@interface Node : NSObject
+	- (instancetype)init;
+	@end
+	@implementation Node
+	- (instancetype)init { self = [super init]; return self; }
+	@end`)
+	var send *ast.MessageExpr
+	ast.Inspect(file, func(n ast.Node) bool {
+		if m, ok := n.(*ast.MessageExpr); ok && send == nil {
+			send = m
+		}
+		return true
+	})
+	if send == nil {
+		t.Fatal("no send")
+	}
+	got := info.Types[send]
+	o := types.AsObject(got)
+	if o == nil || o.Base == nil || o.Base.Name != "Node" {
+		t.Errorf("[super init] is %v, want Node *", got)
+	}
+}

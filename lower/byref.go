@@ -71,14 +71,6 @@ func (u *unit) byrefLayout(t types.Type) (fields []runtime.Field, off, size int6
 // declareByref builds the structure a __block variable lives in and binds the
 // name to it.
 func (u *unit) declareByref(name string, t types.Type, it *ast.InitDeclarator) *byref {
-	if isAggregate(t) {
-		// A __block struct works the same way and is refused for the same
-		// reason a captured struct is: the copy is a memcpy this does not
-		// emit yet, and guessing at it is how the wrong object ends up
-		// shared.
-		u.unsupported(it, "a __block variable of type "+t.String())
-		return nil
-	}
 	fields, off, size, helpers := u.byrefLayout(t)
 
 	b := &byref{typ: t, off: off, size: size}

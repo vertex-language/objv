@@ -117,3 +117,18 @@ NSString *held(NSString *s) {
 // BLOCK_FIELD_IS_OBJECT | BLOCK_BYREF_CALLER, which is what tells the
 // runtime the caller is the byref machinery.
 // vir: i32.const 131
+
+// An aggregate is captured by copying its bytes into the literal, which is
+// what "by value" means for something no register holds. A __block one lives
+// in its structure the same way, and the block reaches it through forwarding
+// like any other.
+struct Pt { double x, y; };
+double moved(void) {
+    struct Pt p = { 1, 2 };
+    __block struct Pt q = { 10, 20 };
+    Action shift = ^{ q.x += p.x; q.y += p.y; };
+    shift();
+    return q.x + q.y;
+}
+// vir: memcpy
+// vir: %q_byref = ptr.alloc

@@ -31,7 +31,7 @@ func (u *unit) protocolSym(p *types.Protocol) ir.Symbol {
 	g := u.mod.Global(u.sym(runtime.ProtocolSymbol(p.Name)), ir.RW,
 		u.metaType("objc_protocol", runtime.Protocol).FType()).
 		Export().Hidden().Weak().
-		Section(u.abi.Name(runtime.SecProtocolData)).
+		Section(u.abi.Name(runtime.SecProtocolData)). // "": the default data section
 		Align(uint64(u.abi.PtrBytes))
 	u.protoSyms[p.Name] = g
 

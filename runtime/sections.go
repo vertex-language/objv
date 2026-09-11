@@ -83,10 +83,15 @@ var machoSections = [...]string{
 	SecProtocolList: "__DATA,__objc_protolist,coalesced,no_dead_strip",
 	SecImageInfo:    "__DATA,__objc_imageinfo,regular,no_dead_strip",
 
-	SecClassData:    "__DATA,__objc_data",
-	SecConst:        "__DATA,__objc_const",
-	SecIvarOffsets:  "__DATA,__objc_ivar",
-	SecProtocolData: "__DATA,__data",
+	SecClassData:   "__DATA,__objc_data",
+	SecConst:       "__DATA,__objc_const",
+	SecIvarOffsets: "__DATA,__objc_ivar",
+	// A protocol object is ordinary writable data, so it goes where
+	// ordinary writable data goes and names no section of its own. Naming
+	// it "__DATA,__data" would be the same section under a second name,
+	// which a Mach-O object cannot hold: an object with a protocol and any
+	// other mutable global would ask for __DATA,__data twice.
+	SecProtocolData: "",
 
 	SecSelectorRefs: "__DATA,__objc_selrefs,literal_pointers,no_dead_strip",
 	SecClassRefs:    "__DATA,__objc_classrefs,regular,no_dead_strip",
@@ -116,7 +121,7 @@ var elfSections = [...]string{
 	SecClassData:    "__objc_data",
 	SecConst:        "__objc_const",
 	SecIvarOffsets:  "__objc_ivar",
-	SecProtocolData: ".data",
+	SecProtocolData: "",
 
 	SecSelectorRefs: "__objc_selrefs",
 	SecClassRefs:    "__objc_classrefs",

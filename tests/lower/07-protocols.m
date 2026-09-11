@@ -25,7 +25,11 @@
 
 id which(void) { return (id)@protocol(Drawable); }
 // vir: export hidden weak global rw @__OBJC_PROTOCOL_$_Drawable
-// vir: section "__DATA,__data"
+// A protocol object is ordinary writable data and names no section: it goes
+// where every mutable global goes, and naming that section explicitly would
+// be the same section under a second name, which a Mach-O object cannot
+// hold.
+// vir-not: @__OBJC_PROTOCOL_$_Drawable @objc_protocol section
 
 // The required and the optional methods are separate lists, and each entry
 // carries a null implementation: a protocol declares and does not define.

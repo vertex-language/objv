@@ -143,14 +143,6 @@ func (u *unit) placeCaptures(e *ast.BlockLit) ([]blockCapture, int64, bool) {
 			off += u.abi.PtrBytes
 			continue
 		}
-		if isAggregate(c.Type) && !types.IsArray(c.Type) {
-			// A captured struct is copied by value, which is a memcpy into
-			// the literal and a memcpy back out. Nothing needs it yet, and
-			// guessing at the copy is how a compiler silently produces the
-			// wrong object.
-			u.unsupported(e, "a block capturing '"+c.Name+"', which is "+c.Type.String())
-			return nil, 0, false
-		}
 		size, align := u.sizeAlign(c.Type)
 		if size == 0 {
 			size = 1
@@ -456,6 +448,16 @@ func (u *unit) stackBlock(e *ast.BlockLit, p blockParts) ir.Value {
 			b.Ptr.Store(st.addr, at(c.off))
 			continue
 		}
+		// An aggregate is captured by copying its bytes into the literal,
+		// which is what "by value" means for something no register holds.
+		if isAggregate(c.Type) {
+			if src, ok := u.capturedAddr(st); ok {
+				u.copyAggregate(at(c.off), src, c.Type)
+				continue
+			}
+			u.errorf(e, "internal: the capture '"+c.Name+"' has no address")
+			return nil
+		}
 		v := u.loadFrom(st.addr, c.Type)
 		if v == nil {
 			return nil
@@ -647,4 +649,17 @@ func (u *unit) callBlock(e *ast.CallExpr, bt *types.Block) ir.Value {
 		return nil
 	}
 	return res.Value(0)
+}
+
+// capturedAddr is where a capture's value is in the enclosing frame. It is
+// the slot itself for an ordinary local, and the variable inside the
+// structure for one that was itself captured by an enclosing block.
+func (u *unit) capturedAddr(st *storage) (ir.Ptr, bool) {
+	switch st.kind {
+	case stLocal:
+		return st.addr, true
+	case stByref:
+		return u.byrefAddr(st.byref, st.addr), true
+	}
+	return ir.Ptr{}, false
 }
