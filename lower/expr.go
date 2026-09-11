@@ -66,10 +66,26 @@ func (u *unit) rvalue(e ast.Expr) ir.Value {
 			return u.constOf(v, t)
 		}
 		if e.Type != nil {
-			size, _ := u.sizeAlign(u.typeOf(e.Type))
+			st := u.typeOf(e.Type)
+			if hasVariableExtent(st) || isVLA(st) {
+				u.unsupported(e, "sizeof applied to a variably modified type name")
+				return nil
+			}
+			size, _ := u.sizeAlign(st)
 			return u.constOf(int64(size), t)
 		}
 		if inner := u.typeOf(e.X); inner != nil {
+			// §6.5.3.4p2: applied to a variably modified object, sizeof is
+			// evaluated where it is written and yields the size that object
+			// actually has. sizeAlign would answer with a pointer's width,
+			// which is what an array of n elements is not.
+			if isVLA(inner) {
+				if v, ok := u.vlaBytes(e.X); ok {
+					return u.convert(v, u.model.SizeType(), t)
+				}
+				u.unsupported(e, "sizeof applied to this variably modified object")
+				return nil
+			}
 			size, _ := u.sizeAlign(inner)
 			return u.constOf(int64(size), t)
 		}
@@ -148,6 +164,9 @@ func (u *unit) rvalue(e ast.Expr) ir.Value {
 
 	case *ast.AvailabilityExpr:
 		return u.availability(e)
+
+	case *ast.GenericExpr:
+		return u.generic(e)
 	}
 	u.unsupported(e, "this expression")
 	return nil
@@ -1368,4 +1387,22 @@ func stripParens(e ast.Expr) ast.Expr {
 		}
 		e = p.X
 	}
+}
+
+// generic lowers a C11 _Generic selection.
+//
+// There is nothing to choose here. The controlling expression is not
+// evaluated — §6.5.1.1 says so, and it is why `_Generic(*(int *)0, ...)` is
+// well defined — and which association it selected is a fact about types
+// that the analyzer settled and recorded. This emits that association's
+// expression and nothing else: the arms not taken are not lowered, so a
+// `_Generic` whose unselected arm would not compile for this type still
+// builds, which is the whole reason the construct exists.
+func (u *unit) generic(e *ast.GenericExpr) ir.Value {
+	sel, ok := u.info.Generics[e]
+	if !ok || sel == nil {
+		u.internal(e, "this _Generic selection")
+		return nil
+	}
+	return u.rvalue(sel)
 }

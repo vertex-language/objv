@@ -346,3 +346,25 @@ func SetPropertySymbol(atomic, copy bool) string {
 	}
 	return name
 }
+
+// The C runtime's two names for static initialization and finalization.
+//
+// A constructor needs no name — the image's __mod_init_func names it by
+// address, and dyld calls what is there. A destructor does: nothing walks a
+// list of them. clang registers each one with the C++ ABI's at-exit, from
+// inside a synthesized initializer, and so does this; the handle identifies
+// the image, so that unloading a bundle runs the destructors that came with
+// it and no others.
+//
+//	int __cxa_atexit(void (*f)(void *), void *arg, void *dso);
+const (
+	CxaAtexit = "__cxa_atexit"
+	DsoHandle = "__dso_handle"
+
+	// StaticInitFunc is the name clang gives the initializer it synthesizes
+	// to hold those registrations, priority and all. Nothing requires the
+	// name — it is internal, and the list names it by address — but a stack
+	// trace through an at-exit registration reads better with the name the
+	// platform's other compiler uses.
+	StaticInitFunc = "__GLOBAL_init_"
+)

@@ -67,6 +67,15 @@ type Info struct {
 	// did not write.
 	Props map[*ast.MemberExpr]*types.Property
 
+	// Generics maps each _Generic selection to the association's value that
+	// its controlling expression's type selected, or to nil where no
+	// association matched and there was no default — which is an error the
+	// checker has already reported. The selection is a typing question and
+	// the answer belongs to whoever asked it: lower emits the expression
+	// recorded here and never repeats the compatibility walk, so the two
+	// passes cannot disagree about which arm the program runs.
+	Generics map[*ast.GenericExpr]ast.Expr
+
 	// Captures maps each block literal to the variables its body reached
 	// out of its own scopes for, in first-mention order — which is the
 	// order lower lays them out in the block literal, so that the order is
@@ -110,6 +119,8 @@ func Check(unit *token.File, file *ast.File, model types.Model, mode Mode) (*Inf
 			Enums:  map[*ast.Enumerator]int64{},
 			Sends:  map[*ast.MessageExpr]*types.Method{},
 			Props:  map[*ast.MemberExpr]*types.Property{},
+
+			Generics: map[*ast.GenericExpr]ast.Expr{},
 
 			Captures: map[*ast.BlockLit][]Capture{},
 		},

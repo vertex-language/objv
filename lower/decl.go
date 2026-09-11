@@ -42,6 +42,11 @@ type fnState struct {
 	// into it; see agg.go.
 	sret ir.Ptr
 
+	// vlaScopes are the open C blocks' stack marks, innermost last: a block
+	// that allocated a variably modified array saves the stack pointer on
+	// its way in and restores it on its way out. See vla.go.
+	vlaScopes []vlaScope
+
 	// pools are the autorelease pool tokens of the enclosing
 	// @autoreleasepool blocks, innermost last.
 	pools []ir.Ptr
@@ -609,6 +614,7 @@ func (u *unit) defineFunc(d *ast.FuncDecl) {
 		fn.Export()
 	}
 	u.top.names[name] = &storage{kind: stFunc, typ: t, sym: fn}
+	u.noteStaticInit(name, fn)
 
 	u.buildBody(fn, ft, paramNames(d), d.Body, nil, runtime.FamilyNone)
 }

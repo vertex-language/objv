@@ -352,8 +352,14 @@ type InitDeclarator struct {
 // Walk skips it.
 type FuncDecl struct {
 	Span
-	Specs    DeclSpecs
-	Decl     Declarator
+	Specs DeclSpecs
+	Decl  Declarator
+	// Attrs are the attributes written between the declarator and the body,
+	// the `void f(void) __attribute__((constructor)) { … }` spelling. They
+	// are kept apart from Specs for the same reason InitDeclarator keeps
+	// its own: an attribute after the declarator is on this function, and
+	// one among the specifiers is on the declaration.
+	Attrs    []*Attr
 	AsmLabel *StringLit
 	Name     *Ident `ast:"-"` // alias into Decl; never nil in a valid definition
 	KR       []*GenDecl

@@ -378,23 +378,33 @@ func IsCompilerBuiltin(name string) bool {
 func (c *checker) genericType(e *ast.GenericExpr) types.Type {
 	ctrl := c.rvalue(e.Ctrl)
 	var chosen, dflt types.Type
+	var chosenExpr, dfltExpr ast.Expr
 	found := false
 	for _, a := range e.Assocs {
 		if a.Type == nil {
-			dflt = c.expr(a.Value)
+			dflt, dfltExpr = c.expr(a.Value), a.Value
 			continue
 		}
 		at := c.typeName(a.Type)
 		t := c.expr(a.Value)
 		if !found && ctrl != nil && at != nil &&
 			types.Compatible(types.Unqualify(at), types.Unqualify(ctrl)) {
-			chosen, found = t, true
+			chosen, chosenExpr, found = t, a.Value, true
 		}
 	}
-	if found {
-		return chosen
+	// Every association was checked, because §6.5.1.1 constrains them all —
+	// the types must be complete and distinct whether or not they are the
+	// one selected — but only the selected one is the expression, and it is
+	// the only one lower is told about.
+	if !found {
+		chosen, chosenExpr = dflt, dfltExpr
+		if dfltExpr == nil && ctrl != nil {
+			c.report(e, "the controlling expression's type matches no "+
+				"association in this _Generic selection, and there is no default")
+		}
 	}
-	return dflt
+	c.info.Generics[e] = chosenExpr
+	return chosen
 }
 
 // ---- postfix ----

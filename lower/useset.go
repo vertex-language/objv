@@ -97,6 +97,16 @@ func (u *unit) planUsed() useSet {
 		}
 	}
 
+	// And the functions that run around main. A constructor is called by
+	// dyld and named by nothing, so nothing mentions it: the use set would
+	// drop every `static void __attribute__((constructor)) setup(void)` in
+	// the language, which is most of them.
+	for name := range u.planStaticInit() {
+		if bodies[name] != nil {
+			work = append(work, name)
+		}
+	}
+
 	// The closure. A definition that is emitted brings in whatever its own
 	// body mentions.
 	for len(work) > 0 {

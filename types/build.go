@@ -431,6 +431,14 @@ func (b *builder) build(base Type, d ast.Declarator) (Type, *ast.Ident) {
 				arr.Form, arr.Len = FixedArray, n
 			} else {
 				arr.Form = VLA // legality per scope is the analyzer's call
+				// A variable length is an expression the program
+				// evaluates, so it has to be typed like one. Nothing else
+				// visits it: Eval walked it looking for a constant and
+				// found none, and the type it builds keeps a length and
+				// not a tree. Without this the lengths of every VLA in the
+				// unit are the one part of it nothing ever checked, and
+				// lowering has no type to widen the count from.
+				b.r.TypeOf(d.Len)
 			}
 		}
 		arr.Static = d.Static.IsValid()

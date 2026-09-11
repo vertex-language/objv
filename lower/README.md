@@ -517,6 +517,8 @@ expression:
 | a `goto` out of a `@try` that has a `@finally` | the destination table holds any number of exits and a `break` reaches one through it, but a `goto`'s label may not be lowered yet, so how many `@finally` blocks stand between here and it is not known where the `goto` stands |
 | a bit-field instance variable | the runtime writes an ivar's offset in bytes, so packing several into one word means agreeing with clang about which bits each gets — a second layout question with the non-fragile ABI on the other side |
 | an inline assembly operand | `ir` has the asm form and the operand-free statement is lowered; a constraint has to be mapped onto the target's register classes, and that table is not written |
+| an array of more than one variably modified dimension | `int a[n][m]`: its element type is itself variably modified, so `a[i]` has a stride nothing in `types.Array` records — every decay and every index would have to carry the extent along. The one-dimensional case is lowered; see vla.go |
+| `sizeof` applied to a variably modified *type name* | `sizeof(int[n])` has no object whose size was computed anywhere, so there is nothing to read it from |
 
 ## Tests
 

@@ -64,6 +64,19 @@ const (
 	// __DATA_CONST when it builds the image. Not __TEXT — a pointer there
 	// could not be relocated.
 	SecBlockConst
+
+	// Where a function with __attribute__((constructor)) is named. dyld
+	// calls everything in __mod_init_func before main, in the order the
+	// pointers appear, which is why the list is sorted by priority before
+	// it is written. There is no matching list for destructors: see
+	// SecStaticInit.
+	SecModInitFunc
+
+	// Where the initializer that registers destructors goes. clang puts it
+	// in a section of its own rather than in __text, and the name is part
+	// of the platform's vocabulary — `ld -order_file` and the dyld
+	// initializer traces both know it.
+	SecStaticInit
 )
 
 // Name is the section a piece of metadata goes in, spelled the way this
@@ -117,6 +130,13 @@ var machoSections = [...]string{
 	SecUString:  "__TEXT,__ustring",
 
 	SecBlockConst: "__DATA,__const",
+
+	// mod_init_funcs is a section *type*, not an attribute: dyld finds the
+	// initializers by the type in the section header, so an object that
+	// writes the pointers into a plain __DATA section has written a list
+	// nothing reads.
+	SecModInitFunc: "__DATA,__mod_init_func,mod_init_funcs",
+	SecStaticInit:  "__TEXT,__StaticInit,regular,pure_instructions",
 }
 
 // ELF and COFF have no segments and no section attributes, so the names are
@@ -152,4 +172,11 @@ var elfSections = [...]string{
 	SecUString:  ".rodata",
 
 	SecBlockConst: ".data.rel.ro",
+
+	// ELF's initializer array is found by the dynamic tag the linker
+	// writes for it, and .init_array is the name that produces one.
+	// Nothing corresponds to __StaticInit: the registration function is
+	// ordinary text.
+	SecModInitFunc: ".init_array",
+	SecStaticInit:  "",
 }

@@ -127,7 +127,10 @@ func (p *parser) startsKRList() bool {
 }
 
 func (p *parser) parseFuncDef(lo token.Pos, specs ast.DeclSpecs, d ast.Declarator) ast.Decl {
-	fn := &ast.FuncDecl{Specs: specs, Decl: d, Name: d.DeclName(), AsmLabel: p.takeAsmLabel()}
+	fn := &ast.FuncDecl{
+		Specs: specs, Decl: d, Name: d.DeclName(),
+		AsmLabel: p.takeAsmLabel(), Attrs: p.takeDeclAttrs(),
+	}
 	p.pushScope()
 	p.declareParams(d)
 	for p.startsKRList() && !p.at(token.LBRACE) && !p.at(token.EOF) {

@@ -23,9 +23,11 @@ func (u *unit) stmt(s ast.Stmt) {
 	case *ast.CompoundStmt:
 		u.push()
 		u.pushARCScope()
+		u.pushVLAScope()
 		for _, item := range s.Items {
 			u.stmt(item)
 		}
+		u.popVLAScope()
 		u.popARCScope()
 		u.pop()
 
@@ -198,6 +200,9 @@ func (u *unit) localDecl(d ast.Decl) {
 				continue
 			}
 			u.initByref(b, t, it.Init)
+			continue
+		}
+		if u.declareVLA(name, t, it) {
 			continue
 		}
 		slot := u.slot(t, name)

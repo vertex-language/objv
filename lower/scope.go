@@ -54,6 +54,10 @@ type storage struct {
 	ivar  string
 	// value is the constant, for an enumeration constant.
 	value int64
+	// vla is how big it is, for a variably modified array. Its size is not
+	// in its type — nothing in types.Array holds an expression — so it is
+	// the byte count computed where the declaration stood. See vla.go.
+	vla *vlaInfo
 }
 
 // pendingImport is an imported symbol that has not been created.

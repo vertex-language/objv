@@ -87,6 +87,7 @@ func Lower(unit *token.File, file *ast.File, info *analyzer.Info, opt Options) (
 	u.declareFile()
 	u.defineFile()
 	u.emitMetadata()
+	u.emitStaticInit()
 	if err := u.mod.Err(); err != nil {
 		u.errorf(file, "internal: the IR builder rejected this unit: %v", err)
 	}
@@ -163,6 +164,12 @@ type unit struct {
 	// +load, which the runtime calls at image load rather than on demand.
 	nonLazyClassList    []ir.Symbol
 	nonLazyCategoryList []ir.Symbol
+
+	// staticInit is what the unit's declarations said about running a
+	// function around main, by name, and ctors and dtors are the
+	// definitions it actually emitted for those. See ctor.go.
+	staticInit   map[string]staticInitAttrs
+	ctors, dtors []initEntry
 
 	// defines is the functions this unit defines, so that a declaration of
 	// one is not imported alongside it; funcs is the definition itself.
