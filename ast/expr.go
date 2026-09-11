@@ -180,11 +180,17 @@ type BinaryExpr struct {
 }
 
 // CondExpr is Cond ? Then : Else.
+// CondExpr is `Cond ? Then : Else`, and GCC's `Cond ?: Else` with Then nil.
+//
+// The second form yields the condition itself when it is true, evaluating it
+// once — which is the whole reason it exists, since `f() ? f() : g()` calls
+// f twice. Then is nil rather than a copy of Cond because a copy would be a
+// second evaluation to everything downstream.
 type CondExpr struct {
 	Span
 	Cond     Expr
 	Question token.Pos
-	Then     Expr
+	Then     Expr // nil in `a ?: b`
 	Colon    token.Pos
 	Else     Expr
 }

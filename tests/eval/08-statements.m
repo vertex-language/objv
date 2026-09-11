@@ -63,3 +63,10 @@ void duff(char *to, const char *from, int count) {
     }
 }
 // vir: @do_body
+
+// GCC's binary conditional, which is everywhere in Objective-C: the value is
+// read once and yielded when it is true. `a ? a : b` would read it twice, and
+// a is usually a call.
+NSString *orDefault(NSString *name);
+NSString *orDefault(NSString *name) { return name ?: @"untitled"; }
+// vir: cond_then

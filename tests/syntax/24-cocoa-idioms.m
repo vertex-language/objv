@@ -138,11 +138,15 @@ int main(void) {
             [[Cache alloc] initWithCapacity:16];
         cache[@"key"] = @[@"value"];
         NSArray<NSString *> *values = cache[@"key"];
+        // The middle operand of ?: is optional -- GCC's extension, which
+        // every compiler that builds Cocoa accepts and which Objective-C
+        // uses for exactly this: a default where a property is nil, with
+        // the property read once.
         id info = @{
-            @"name": cache.name ? cache.name : @"unnamed",
+            @"name": cache.name ?: @"unnamed",
             @"count": @(cache.count),
             @"selector": @"objectForKey:",
-            @"values": values ? values : @[],
+            @"values": values ?: @[],
         };
         if (@available(macOS 10.12, *)) {
             (void)info;

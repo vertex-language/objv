@@ -161,6 +161,9 @@ func (c *checker) evalInt(e ast.Expr) (int64, bool) {
 			return 0, false
 		}
 		if v != 0 {
+			if e.Then == nil {
+				return v, true // `a ?: b` yields a
+			}
 			return c.evalInt(e.Then)
 		}
 		return c.evalInt(e.Else)

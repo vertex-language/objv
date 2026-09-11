@@ -833,7 +833,13 @@ func (c *checker) checkComparison(e *ast.BinaryExpr, x, y types.Type) {
 func (c *checker) condType(e *ast.CondExpr) types.Type {
 	cond := c.rvalue(e.Cond)
 	c.requireScalar(e.Cond, cond, "?:")
-	t, f := c.rvalue(e.Then), c.rvalue(e.Else)
+	// `a ?: b` yields a when a is true, so a is both the condition and the
+	// first arm — typed once, because it is evaluated once.
+	t := cond
+	if e.Then != nil {
+		t = c.rvalue(e.Then)
+	}
+	f := c.rvalue(e.Else)
 	if t == nil || f == nil {
 		return nil
 	}
@@ -844,7 +850,7 @@ func (c *checker) condType(e *ast.CondExpr) types.Type {
 		return types.Typ(types.Void)
 	case types.IsObjCObject(t) && c.isNullConst(e.Else):
 		return t
-	case types.IsObjCObject(f) && c.isNullConst(e.Then):
+	case types.IsObjCObject(f) && e.Then != nil && c.isNullConst(e.Then):
 		return f
 	case types.IsObjCObject(t) && types.IsObjCObject(f):
 		// Two object pointers: the common type is the nearest class both
@@ -854,7 +860,7 @@ func (c *checker) condType(e *ast.CondExpr) types.Type {
 		return t
 	case types.IsPointer(t) && c.isNullConst(e.Else):
 		return t
-	case types.IsPointer(f) && c.isNullConst(e.Then):
+	case types.IsPointer(f) && e.Then != nil && c.isNullConst(e.Then):
 		return f
 	}
 	c.report(e, "the two arms of '?:' have incompatible types "+t.String()+" and "+f.String())

@@ -44,8 +44,12 @@ func isAssignOp(k token.Kind) bool {
 	return false
 }
 
-// parseCond: LogicalOrExpression [? Expression : ConditionalExpression].
+// parseCond: LogicalOrExpression [? [Expression] : ConditionalExpression].
 // ConstantExpression is this production; constant-ness is a check.
+//
+// The middle operand is optional, which is GCC's extension and is everywhere
+// in Objective-C: `name ?: @"untitled"` reads the variable once and yields it
+// when it is not nil. Every compiler that builds Cocoa accepts it.
 func (p *parser) parseCond() ast.Expr {
 	x := p.parseBinary(2) // 2 is ||'s level; COMMA (1) never binds here
 	if !p.at(token.QUESTION) {
@@ -53,7 +57,9 @@ func (p *parser) parseCond() ast.Expr {
 	}
 	c := &ast.CondExpr{Cond: x, Question: p.pos()}
 	p.next()
-	c.Then = p.parseExpr()
+	if !p.at(token.COLON) {
+		c.Then = p.parseExpr()
+	}
 	c.Colon = p.expect(token.COLON)
 	c.Else = p.parseCond() // right-associative
 	c.Span = ast.Span{Lo: x.Pos(), Hi: c.Else.End()}

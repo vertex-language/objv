@@ -392,6 +392,15 @@ func (u *unit) truth(e ast.Expr) *ir.I1 {
 	if v == nil {
 		return nil
 	}
+	return u.truthOf(v)
+}
+
+// truthOf is truth over a value already in hand, for the caller that needs
+// the value as well as the test — `a ?: b` evaluates a once.
+func (u *unit) truthOf(v ir.Value) *ir.I1 {
+	if v == nil {
+		return nil
+	}
 	b := u.fn.cur
 	var c ir.I1
 	switch x := v.(type) {
@@ -871,6 +880,9 @@ func (u *unit) shortCircuit(e *ast.BinaryExpr, t types.Type) ir.Value {
 // conditional lowers ?: as a branch with a block parameter, which is what
 // VIR has instead of a phi.
 func (u *unit) conditional(e *ast.CondExpr, t types.Type) ir.Value {
+	if e.Then == nil {
+		return u.binaryConditional(e, t)
+	}
 	c := u.truth(e.Cond)
 	if c == nil {
 		return nil
@@ -898,6 +910,56 @@ func (u *unit) conditional(e *ast.CondExpr, t types.Type) ir.Value {
 			u.fn.cur.Br(done.To(u.convert(tv, u.typeOf(e.Then), t)))
 		}
 	}
+	u.fn.cur = elseB
+	ev := u.rvalue(e.Else)
+	if u.at() {
+		if void {
+			u.fn.cur.Br(done.To())
+		} else if ev != nil {
+			u.fn.cur.Br(done.To(u.convert(ev, u.typeOf(e.Else), t)))
+		}
+	}
+	u.fn.cur = done
+	return res
+}
+
+// binaryConditional lowers GCC's `a ?: b`.
+//
+// One evaluation of a, not two. That is the entire difference from
+// `a ? a : b` and the entire reason the form exists: a is often a call, and
+// `[self cached] ?: [self compute]` must not compute twice when the cache
+// hit. So the value is taken once, tested, and handed to the true edge.
+func (u *unit) binaryConditional(e *ast.CondExpr, t types.Type) ir.Value {
+	v := u.rvalue(e.Cond)
+	if v == nil {
+		return nil
+	}
+	ct := u.typeOf(e.Cond)
+	c := u.truthOf(v)
+	if c == nil {
+		return nil
+	}
+	thenB, elseB, done := u.block("cond.then"), u.block("cond.else"), u.block("cond.done")
+
+	void := types.IsVoid(t)
+	var res ir.Value
+	if !void {
+		r, ok := u.reg(t)
+		if !ok {
+			u.unsupported(e, "a conditional of type "+t.String())
+			return nil
+		}
+		res = done.Param(r, "v")
+	}
+	u.fn.cur.BrIf(*c, thenB.To(), elseB.To())
+
+	u.fn.cur = thenB
+	if void {
+		u.fn.cur.Br(done.To())
+	} else {
+		u.fn.cur.Br(done.To(u.convert(v, ct, t)))
+	}
+
 	u.fn.cur = elseB
 	ev := u.rvalue(e.Else)
 	if u.at() {
