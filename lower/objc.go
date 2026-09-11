@@ -50,6 +50,7 @@ func (u *unit) message(e *ast.MessageExpr, t types.Type) ir.Value {
 			}
 			val := u.rvalue(v)
 			if val == nil {
+				u.internal(v, "an argument of this message")
 				return nil
 			}
 			at := u.typeOf(v)

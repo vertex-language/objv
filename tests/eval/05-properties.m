@@ -46,3 +46,16 @@ id keyed(NSDictionary *d, NSMutableDictionary *m, id k, id v) {
 }
 // vir: "objectForKeyedSubscript:"
 // vir: "setObject:forKeyedSubscript:"
+
+// Dot syntax may name the *getter* rather than the property, which is what a
+// getter= attribute leaves behind: the property is `dirty` and the name a
+// reader writes is `isDirty`. Nothing declares a property with that name, so
+// the send is resolved from the method.
+@interface Flagged : NSObject
+@property (nonatomic, assign, getter=isDirty) BOOL dirty;
+- (NSString *)describe;
+@end
+@implementation Flagged
+- (NSString *)describe { return self.isDirty ? @"dirty" : @"clean"; }
+@end
+// vir: @_OBJC_SELECTOR_REFERENCES_

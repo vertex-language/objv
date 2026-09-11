@@ -37,7 +37,7 @@ type objcRef struct {
 func (u *unit) propertyRef(e *ast.MemberExpr) *objcRef {
 	p := u.info.Props[e]
 	if p == nil {
-		return nil
+		return u.getterRef(e)
 	}
 	recv, super := u.recvOf(e.X)
 	if recv == nil {
@@ -45,6 +45,32 @@ func (u *unit) propertyRef(e *ast.MemberExpr) *objcRef {
 	}
 	return &objcRef{recv: *recv, super: super, get: p.Getter, set: p.Setter,
 		typ: p.Type, at: e}
+}
+
+// getterRef is dot syntax that named a *method* and not a property.
+//
+// Two shapes reach it, and both are ordinary. `view.superview`, where the
+// method is declared and no @property is — clang admits it and the send it
+// becomes is the same one. And `doc.isDirty`, where a property named dirty
+// declared its getter under another name: the name written is the selector,
+// and no property carries it.
+//
+// There is no setter. A method is not a pair, and `x.foo = v` where foo is a
+// method is the analyzer's to report — objcAssign says "read-only" for an
+// objcRef with no setter, which is the same sentence.
+func (u *unit) getterRef(e *ast.MemberExpr) *objcRef {
+	if e.Op != token.PERIOD || !types.IsObjectPointer(u.typeOf(e.X)) {
+		return nil
+	}
+	t := u.typeOf(e)
+	if t == nil {
+		return nil
+	}
+	recv, super := u.recvOf(e.X)
+	if recv == nil {
+		return nil
+	}
+	return &objcRef{recv: *recv, super: super, get: u.name(e.Sel), typ: t, at: e}
 }
 
 // subscriptRef resolves `a[i]` where a is an object.

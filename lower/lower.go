@@ -344,6 +344,26 @@ func (u *unit) unsupported(n ast.Node, what string) {
 	u.errorf(n, "objv does not lower %s yet", what)
 }
 
+// internal reports something the analyzer accepted and this package could
+// not lower.
+//
+// A nil where a value belongs is the one failure that must not be quiet: the
+// statement holding it is dropped, and a program that builds with a statement
+// missing is worse than one that does not build. Lowering runs only over a
+// tree the analyzer accepted, so reaching here is a gap in this package
+// rather than a fault in the program.
+//
+// Nothing is said once something else has been: whatever was reported first
+// is the cause, and this would be its echo.
+func (u *unit) internal(n ast.Node, what string) {
+	for _, d := range u.diags {
+		if d.Severity == token.Error {
+			return
+		}
+	}
+	u.errorf(n, "internal: %s did not lower", what)
+}
+
 // uniq returns a fresh name for something the source did not name.
 func (u *unit) uniq(prefix string) string {
 	u.anon++

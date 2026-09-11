@@ -1180,6 +1180,7 @@ func (u *unit) call(e *ast.CallExpr, t types.Type) ir.Value {
 		}
 		v := u.rvalue(a)
 		if v == nil {
+			u.internal(a, "an argument of this call")
 			return nil
 		}
 		at := u.typeOf(a)
