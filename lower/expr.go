@@ -456,7 +456,12 @@ func (u *unit) binary(e *ast.BinaryExpr, t types.Type) ir.Value {
 		return u.rvalue(e.Y)
 	}
 
-	xt, yt := u.typeOf(e.X), u.typeOf(e.Y)
+	// §6.3.2.1p3: an array operand is a pointer to its first element
+	// everywhere but sizeof, &, and a string literal's initializer — none
+	// of which is a binary operator. So `a + 2` on a char[8] is pointer
+	// arithmetic, and asking the declared type would say it is arithmetic
+	// on an array and have nothing to do.
+	xt, yt := types.Decay(u.typeOf(e.X)), types.Decay(u.typeOf(e.Y))
 	// Pointer arithmetic scales by the element, which is the one place the
 	// operands are not converted to a common type first.
 	if types.IsPointer(xt) && types.IsInteger(yt) && (e.Op == token.ADD || e.Op == token.SUB) {

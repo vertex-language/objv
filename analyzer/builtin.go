@@ -141,6 +141,13 @@ func BuiltinNames() []string {
 // builtinType is the type of a builtin used as a value, or nil for a name
 // objv does not implement.
 func builtinType(name string) types.Type {
+	if _, ok := AtomicBuiltins[name]; ok {
+		// Unprototyped, which is what "one name, every width" amounts to in
+		// C's type system: there is no parameter list to check the call
+		// against, and the result comes from the operand at the call site.
+		// See atomicResult.
+		return &types.Func{Ret: types.Typ(types.Int), Proto: false}
+	}
 	spec, ok := builtins[name]
 	if !ok {
 		return nil
@@ -183,6 +190,9 @@ func paramType(k types.Kind) types.Type {
 // only to carry T into an expression — C has no other way to pass a type to
 // something that is not a keyword. So the call's type is that pointer's.
 func builtinResult(name string, args []types.Type) (types.Type, bool) {
+	if t, ok := atomicResult(name, args); ok {
+		return t, true
+	}
 	if name != "__builtin_va_arg_ref" || len(args) != 2 || args[1] == nil {
 		return nil, false
 	}
@@ -190,4 +200,38 @@ func builtinResult(name string, args []types.Type) (types.Type, bool) {
 		return nil, false
 	}
 	return args[1], true
+}
+
+// AtomicBuiltins is §7.17's read-modify-write operations, which objv's own
+// <stdatomic.h> is written in terms of.
+//
+// They are not in the table above because they have no signature: the type
+// is the *pointee* of the first argument, and a builtin has no overloading
+// to state that with. atomic_fetch_add on an _Atomic(long) is a long
+// operation and on an _Atomic(int) an int one, and the same name is both.
+var AtomicBuiltins = map[string]string{
+	"__builtin_atomic_exchange":         "xchg",
+	"__builtin_atomic_fetch_add":        "add",
+	"__builtin_atomic_fetch_sub":        "sub",
+	"__builtin_atomic_fetch_and":        "and",
+	"__builtin_atomic_fetch_or":         "or",
+	"__builtin_atomic_fetch_xor":        "xor",
+	"__builtin_atomic_compare_exchange": "cas",
+}
+
+// atomicResult types one of them: the value read for an exchange or a fetch,
+// and whether the exchange happened for a compare-exchange.
+func atomicResult(name string, args []types.Type) (types.Type, bool) {
+	op, ok := AtomicBuiltins[name]
+	if !ok || len(args) == 0 || args[0] == nil {
+		return nil, false
+	}
+	p := types.AsPointer(types.Unqualify(args[0]))
+	if p == nil {
+		return nil, false
+	}
+	if op == "cas" {
+		return types.Typ(types.Bool), true
+	}
+	return types.Unqualify(p.Elem), true
 }

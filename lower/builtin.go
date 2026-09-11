@@ -98,6 +98,9 @@ var builtinOps = func() map[string]builtinOp {
 // and returning false lets the ordinary call path run for anything that only
 // looks like a builtin.
 func (u *unit) builtinCall(name string, e *ast.CallExpr) (ir.Value, bool) {
+	if v, ok := u.atomicBuiltin(name, e); ok {
+		return v, true
+	}
 	op, ok := builtinOps[name]
 	if !ok {
 		return nil, false

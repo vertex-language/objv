@@ -78,3 +78,19 @@ int stops(int x) {
 // C says reaching an unreachable is undefined and VIR has no verb for
 // undefined behaviour under a friendlier name, so the path ends in a trap.
 // vir: trap
+
+// §7.17's read-modify-write operations, which objv's own <stdatomic.h> is
+// written in terms of. They have no signature — the type is the pointee of
+// the first argument, and one name serves every width — so the analyzer
+// types them from the operand and lowering picks the verb the same way.
+long bumpLong(long *p, long by);
+long bumpLong(long *p, long by) { return __builtin_atomic_fetch_add(p, by); }
+int swapInt(int *p, int v);
+int swapInt(int *p, int v) { return __builtin_atomic_exchange(p, v); }
+_Bool claim(long *p, long *want, long desired);
+_Bool claim(long *p, long *want, long desired) {
+    return __builtin_atomic_compare_exchange(p, want, desired);
+}
+// vir: i64.atomic_rmwadd
+// vir: i32.atomic_rmwxchg
+// vir: i64.atomic_cas

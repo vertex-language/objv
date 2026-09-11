@@ -487,6 +487,25 @@ A statement with an operand needs its constraint mapped onto the target's
 register classes, which is a table this package does not have. It is refused
 by name, and the refusal says which part it could not do.
 
+## Atomics
+
+§7.17's read-modify-write operations, which objv's own `<stdatomic.h>` is
+written in terms of and which had no implementation behind them. They are not
+ordinary builtins: they have no signature, because the type is the *pointee*
+of the first argument and one name serves every width — `atomic_fetch_add` on
+an `_Atomic(long)` is a long operation and on an `_Atomic(int)` an int one.
+So the analyzer types them from the operand and lowering picks the VIR verb
+from the same place.
+
+Every one is emitted sequentially consistent. C11 lets a program ask for less
+and the header already discards the request — the `_explicit` forms evaluate
+their ordering argument and hand it to the plain one — so the ordering is the
+strongest rather than a guess at what was meant. Strengthening is always
+correct; weakening is not.
+
+`atomic_load` and `atomic_store` are a plain dereference, which is the
+header's own simplification and not this package's.
+
 ## Not yet lowered
 
 Each of these reports once, as an error, naming the construct rather than the

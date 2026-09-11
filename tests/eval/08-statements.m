@@ -70,3 +70,19 @@ void duff(char *to, const char *from, int count) {
 NSString *orDefault(NSString *name);
 NSString *orDefault(NSString *name) { return name ?: @"untitled"; }
 // vir: cond_then
+
+// §6.3.2.1p3: an array operand of a binary operator is a pointer to its
+// first element. Asking the declared type instead says it is arithmetic on
+// an array, which has no lowering.
+char *third(char *s);
+char *third(char *s) {
+    char local[8] = "abcdefg";
+    (void)local;
+    return s + 2;
+}
+long span(void);
+long span(void) {
+    int cells[4] = {1, 2, 3, 4};
+    return (cells + 3) - cells;
+}
+// vir: ptr.add
