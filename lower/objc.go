@@ -593,8 +593,18 @@ func (u *unit) autoreleasePool(s *ast.AutoreleasePoolStmt) {
 	pop := u.extern(runtime.AutoreleasePoolPop, ir.NewSig().Param(ir.TypePtr))
 
 	tok := u.fn.cur.Call(push).Ptr(0)
+	// The token is parked in a slot as well as kept on the function state:
+	// the pad that pops it on the unwinding path is not dominated by the
+	// block the push is in, so it cannot read the value directly.
+	slot := u.fn.entry.Ptr.Alloc(uint64(u.abi.PtrBytes), uint64(u.abi.PtrBytes))
+	u.fn.cur.Ptr.Store(tok, slot)
+
 	u.fn.pools = append(u.fn.pools, tok)
+	u.openRegion(u.escapePad("pool.esc", func() {
+		u.fn.cur.Call(pop, u.fn.cur.Ptr.Load(slot))
+	}))
 	u.stmt(s.Body)
+	u.closeRegion()
 	u.fn.pools = u.fn.pools[:len(u.fn.pools)-1]
 	if u.at() {
 		u.fn.cur.Call(pop, tok)
@@ -615,9 +625,9 @@ func (u *unit) releasePools() {
 
 // synchronized lowers §7.3's @synchronized: a lock, the body, an unlock.
 //
-// The unlock is emitted on the path out, which is enough for a body that
-// falls through or returns and not enough for one that throws — that needs
-// the same unwind machinery @try does, which this package does not emit yet.
+// The unlock happens on every path out, the unwinding one included — a lock
+// a thrown exception left held is a deadlock rather than a leak. See try.go
+// for what the pad is.
 func (u *unit) synchronized(s *ast.SyncStmt) {
 	if !u.at() {
 		return
@@ -630,8 +640,18 @@ func (u *unit) synchronized(s *ast.SyncStmt) {
 	enter := u.extern(runtime.SyncEnter, ir.NewSig().Param(ir.TypePtr).Ret(ir.TypeI32))
 	exit := u.extern(runtime.SyncExit, ir.NewSig().Param(ir.TypePtr).Ret(ir.TypeI32))
 
+	// Through a slot, for the reason autoreleasePool states: the pad is
+	// reached only by an unwind edge, and the block the lock was taken in
+	// does not dominate it.
+	slot := u.fn.entry.Ptr.Alloc(uint64(u.abi.PtrBytes), uint64(u.abi.PtrBytes))
+	u.fn.cur.Ptr.Store(p, slot)
 	u.fn.cur.Call(enter, p)
+
+	u.openRegion(u.escapePad("sync.esc", func() {
+		u.fn.cur.Call(exit, u.fn.cur.Ptr.Load(slot))
+	}))
 	u.stmt(s.Body)
+	u.closeRegion()
 	if u.at() {
 		u.fn.cur.Call(exit, p)
 	}

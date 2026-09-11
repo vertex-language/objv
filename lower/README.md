@@ -433,6 +433,13 @@ would be wrong twice over: `resume` hands control to the unwinder, which steps
 past this frame entirely, and a block every exit reaches is dominated by no pad,
 which is what §19.5 requires of `resume`'s operand.
 
+`@synchronized` and `@autoreleasepool` are the same machinery without the
+switch: each is a region whose pad unlocks or drains and rethrows, because a
+lock a thrown exception left held is a deadlock rather than a leak. Both read
+what they owe out of a frame slot rather than out of the value they were given
+— a pad is reached only by an unwind edge, so the block the lock was taken in
+does not dominate it.
+
 One thing ARC does not yet do here: a `__strong` local is not released on the
 path that unwinds past its scope. The releases are emitted on the paths out
 that lowering can see, and an unwind edge is not one of them — so an exception

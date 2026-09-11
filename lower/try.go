@@ -258,6 +258,7 @@ func (u *unit) finallyBody(sc *tryScope, f *ast.FinallyClause) {
 // the one open right now.
 func (u *unit) escapePad(label string, cleanup func()) func() *ir.Block {
 	return func() *ir.Block {
+		u.needPersonality()
 		pad := u.fn.fn.Pad(u.padLabel(label), ir.Catch(nil))
 		saved := u.fn.cur
 		u.fn.cur = pad
