@@ -249,8 +249,14 @@ func (u *unit) emitClass(k *types.Class) {
 	meta := u.emitClassObject(metaName, metaIsa, metaSuper, metaRO)
 	u.emitClassObject(clsName, meta, clsSuper, ro)
 
-	// The list the runtime scans. One entry per class the image defines.
+	// The list the runtime scans. One entry per class the image defines,
+	// and a second entry in the non-lazy list for a class that implements
+	// +load: the ordinary list is realized on demand, and +load has to run
+	// before anything demands anything. See implementsLoad.
 	u.classList = append(u.classList, u.classSyms[clsName])
+	if u.implementsLoad(k, "") {
+		u.nonLazyClassList = append(u.nonLazyClassList, u.classSyms[clsName])
+	}
 }
 
 // instanceLayout is what the compiler believed the instance layout was.
@@ -372,6 +378,22 @@ func (u *unit) emitMethodList(name string, ms []methodFn) ir.Symbol {
 }
 
 // methodsOf is the methods this unit compiled for a class or a category.
+// implementsLoad reports whether this class or category defines +load.
+//
+// It is the one selector nothing sends: the runtime walks the non-lazy lists
+// when the image is mapped and calls every +load it finds there, before main
+// and before any other message reaches the class. A class that implements it
+// and is not in that list has a +load nobody ever calls, which is silent —
+// the program runs, with whatever the method was going to set up unset.
+func (u *unit) implementsLoad(k *types.Class, category string) bool {
+	for _, m := range u.methodsOf(k, category, true) {
+		if m.sig.Sel == runtime.LoadSelector {
+			return true
+		}
+	}
+	return false
+}
+
 func (u *unit) methodsOf(k *types.Class, category string, class bool) []methodFn {
 	var out []methodFn
 	for _, m := range u.methodFns {
@@ -529,6 +551,9 @@ func (u *unit) emitCategory(c categoryImpl) {
 			ir.Lit(ir.Int(0)), // the reserved word
 		))
 	u.categoryList = append(u.categoryList, g)
+	if u.implementsLoad(k, name) {
+		u.nonLazyCategoryList = append(u.nonLazyCategoryList, g)
+	}
 }
 
 // hasObjC reports whether this unit put anything in the image that libobjc
@@ -561,6 +586,14 @@ func (u *unit) emitImageInfo() {
 	}
 	if len(u.categoryList) > 0 {
 		u.emitList(runtime.CategoryListLabel, runtime.SecCategoryList, u.categoryList)
+	}
+	if len(u.nonLazyClassList) > 0 {
+		u.emitList(runtime.NonLazyClassListLabel, runtime.SecNonLazyClassList,
+			u.nonLazyClassList)
+	}
+	if len(u.nonLazyCategoryList) > 0 {
+		u.emitList(runtime.NonLazyCategoryListLabel, runtime.SecNonLazyCategoryList,
+			u.nonLazyCategoryList)
 	}
 	u.mod.Global(u.sym(runtime.ImageInfoLabel), ir.RO,
 		u.metaType("objc_image_info", runtime.ImageInfo).FType()).

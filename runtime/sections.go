@@ -20,6 +20,14 @@ const (
 	// The lists the runtime walks at load.
 	SecClassList Section = iota
 	SecCategoryList
+
+	// The non-lazy halves of the two above. A class or category that
+	// implements +load goes in both: the ordinary list is what the runtime
+	// realizes on demand, and this one is what it walks at image load to
+	// find the +loads to call. A class that is only in the first has its
+	// +load found by nobody.
+	SecNonLazyClassList
+	SecNonLazyCategoryList
 	SecProtocolList
 	SecImageInfo
 
@@ -80,8 +88,11 @@ func (a ABI) Name(s Section) string {
 var machoSections = [...]string{
 	SecClassList:    "__DATA,__objc_classlist,regular,no_dead_strip",
 	SecCategoryList: "__DATA,__objc_catlist,regular,no_dead_strip",
-	SecProtocolList: "__DATA,__objc_protolist,coalesced,no_dead_strip",
-	SecImageInfo:    "__DATA,__objc_imageinfo,regular,no_dead_strip",
+
+	SecNonLazyClassList:    "__DATA,__objc_nlclslist,regular,no_dead_strip",
+	SecNonLazyCategoryList: "__DATA,__objc_nlcatlist,regular,no_dead_strip",
+	SecProtocolList:        "__DATA,__objc_protolist,coalesced,no_dead_strip",
+	SecImageInfo:           "__DATA,__objc_imageinfo,regular,no_dead_strip",
 
 	SecClassData:   "__DATA,__objc_data",
 	SecConst:       "__DATA,__objc_const",
@@ -115,8 +126,11 @@ var machoSections = [...]string{
 var elfSections = [...]string{
 	SecClassList:    "__objc_classlist",
 	SecCategoryList: "__objc_catlist",
-	SecProtocolList: "__objc_protolist",
-	SecImageInfo:    "__objc_imageinfo",
+
+	SecNonLazyClassList:    "__objc_nlclslist",
+	SecNonLazyCategoryList: "__objc_nlcatlist",
+	SecProtocolList:        "__objc_protolist",
+	SecImageInfo:           "__objc_imageinfo",
 
 	SecClassData:    "__objc_data",
 	SecConst:        "__objc_const",

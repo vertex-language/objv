@@ -17,7 +17,7 @@
 - (int)count { return _count; }
 // An instance variable's offset is a global the runtime writes: that is the
 // non-fragile ABI in one load.
-// vir: ptr.getaddr @_OBJC_IVAR_$_Counter$_count
+// vir: ptr.getaddr @_OBJC_IVAR_$_Counter._count
 // vir: i64.sload32
 
 - (void)add:(int)n { _count = _count + n; }

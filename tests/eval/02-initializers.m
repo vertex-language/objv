@@ -33,7 +33,7 @@ int locals(void) {
 }
 // vir: memset
 // vir: memcpy
-// vir: internal global rw @_static$once
+// vir: internal global rw @_static.once
 
 // A struct with no tag still needs a name in VIR, where every struct type
 // has one. It is numbered, and the number is not written with a '.': a type

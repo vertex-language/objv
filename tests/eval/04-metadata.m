@@ -41,8 +41,8 @@
 // vir: @__OBJC_$_PROP_LIST_Shape
 
 // The offset variables, one per instance variable.
-// vir: export global rw @_OBJC_IVAR_$_Shape$_sides i32 section "__DATA,__objc_ivar"
-// vir: export global rw @_OBJC_IVAR_$_Shape$_name i32
+// vir: export global rw @_OBJC_IVAR_$_Shape._sides i32 section "__DATA,__objc_ivar"
+// vir: export global rw @_OBJC_IVAR_$_Shape._name i32
 
 // The category, and the list the runtime scans for it.
 // vir: @__OBJC_$_CATEGORY_Shape_$_Extra

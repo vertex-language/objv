@@ -366,7 +366,7 @@ int twice(int x) { return x * 2; }
 		`use "aarch64/macos"`,      // and opens with the target
 		"export func @_twice",      // a C function, with Mach-O's underscore
 		"@__i_Counter__n",          // a method, symbol-mangled
-		"@_OBJC_IVAR_$_Counter$_n", // the offset variable an access loads
+		"@_OBJC_IVAR_$_Counter._n", // the offset variable an access loads
 		"@_OBJC_CLASS_$_Counter",   // the class object
 		"__DATA,__objc_classlist",  // and the list the runtime scans
 	} {

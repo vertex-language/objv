@@ -27,6 +27,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -42,29 +43,32 @@ func TestPrograms(t *testing.T) {
 		t.Skip("clang is the oracle and is not on PATH")
 	}
 
-	files, _ := filepath.Glob("tests/programs/*.m")
-	if len(files) == 0 {
-		t.Fatal("no files in tests/programs")
+	entries, err := os.ReadDir("tests/programs")
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, path := range files {
-		t.Run(filepath.Base(path), func(t *testing.T) {
-			// Not parallel. Each file is four builds against the SDK --
+	if len(entries) == 0 {
+		t.Fatal("no programs in tests/programs")
+	}
+	for _, e := range entries {
+		p := programOf(t, filepath.Join("tests/programs", e.Name()))
+		if len(p.files) == 0 {
+			continue
+		}
+		t.Run(e.Name(), func(t *testing.T) {
+			// Not parallel. Each program is four builds against the SDK --
 			// two by objv and two by clang -- and running the corpus at
 			// once is a few dozen concurrent links, which is a load the
 			// machine notices and a speedup nobody needed.
-			src, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, arc := range modesOf(string(src)) {
+			for _, arc := range p.modes {
 				name := "mrr"
 				if arc {
 					name = "arc"
 				}
 				t.Run(name, func(t *testing.T) {
 					dir := t.TempDir()
-					want := buildWithClang(t, clang, path, dir, arc)
-					got := buildWithObjv(t, path, dir, arc)
+					want := buildWithClang(t, clang, p, dir, arc)
+					got := buildWithObjv(t, clang, p, dir, arc)
 					if got.out != want.out {
 						t.Errorf("output differs from clang's\n--- objv ---\n%s\n--- clang ---\n%s",
 							got.out, want.out)
@@ -78,8 +82,83 @@ func TestPrograms(t *testing.T) {
 	}
 }
 
-// modesOf reads the `// mode:` line, defaulting to both.
-func modesOf(src string) []bool {
+// A program is one corpus entry: a single file, or a directory of
+// translation units that are linked together.
+type program struct {
+	files      []string // every source, in link order
+	foreign    []string // the ones clang compiles in both builds
+	frameworks []string
+	modes      []bool
+}
+
+// programOf reads one entry. A directory is a multi-file program, and its
+// files are taken in name order so the link order is the one a reader sees.
+//
+// A file named *.clang.m is compiled by clang in *both* builds, which is what
+// makes a directory an interop test rather than only a linking one: half the
+// objects come from the compiler this one has to agree with, in one process,
+// and the metadata the runtime walks has to be the metadata clang emitted.
+func programOf(t *testing.T, path string) program {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var p program
+	if !info.IsDir() {
+		if filepath.Ext(path) != ".m" {
+			return p
+		}
+		p.files = []string{path}
+	} else {
+		ents, err := os.ReadDir(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range ents {
+			if filepath.Ext(e.Name()) == ".m" {
+				p.files = append(p.files, filepath.Join(path, e.Name()))
+			}
+		}
+	}
+
+	seen := map[string]bool{"Foundation": true}
+	p.frameworks = []string{"Foundation"}
+	for _, f := range p.files {
+		if strings.HasSuffix(f, ".clang.m") {
+			p.foreign = append(p.foreign, f)
+		}
+		src, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, fw := range frameworksOf(string(src)) {
+			if !seen[fw] {
+				seen[fw] = true
+				p.frameworks = append(p.frameworks, fw)
+			}
+		}
+		if m := modeOf(string(src)); m != nil {
+			p.modes = m
+		}
+	}
+	if p.modes == nil {
+		p.modes = []bool{false, true}
+	}
+	return p
+}
+
+func (p program) isForeign(file string) bool {
+	for _, f := range p.foreign {
+		if f == file {
+			return true
+		}
+	}
+	return false
+}
+
+// modeOf reads the `// mode:` line, or nil where the file does not say.
+func modeOf(src string) []bool {
 	for _, line := range strings.Split(src, "\n") {
 		rest, ok := strings.CutPrefix(strings.TrimSpace(line), "// mode:")
 		if !ok {
@@ -92,13 +171,12 @@ func modesOf(src string) []bool {
 			return []bool{false}
 		}
 	}
-	return []bool{false, true}
+	return nil
 }
 
-// frameworksOf reads the `// frameworks:` line. Foundation is always linked;
-// a program that needs another says so.
+// frameworksOf reads the `// frameworks:` line of one file.
 func frameworksOf(src string) []string {
-	out := []string{"Foundation"}
+	var out []string
 	for _, line := range strings.Split(src, "\n") {
 		rest, ok := strings.CutPrefix(strings.TrimSpace(line), "// frameworks:")
 		if !ok {
@@ -114,41 +192,36 @@ type programRun struct {
 	code int
 }
 
-func buildWithObjv(t *testing.T, path, dir string, arc bool) programRun {
+// buildWithObjv compiles every source objv owns, hands the rest to clang, and
+// links the lot with objv's own linker.
+func buildWithObjv(t *testing.T, clang string, p program, dir string, arc bool) programRun {
 	t.Helper()
-	src, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
 	bin := filepath.Join(dir, "objv-prog")
+	inputs := make([]objv.Input, 0, len(p.files))
+	for i, f := range p.files {
+		if !p.isForeign(f) {
+			inputs = append(inputs, objv.File(f))
+			continue
+		}
+		obj := filepath.Join(dir, "foreign"+itoa(i)+".o")
+		compileWithClang(t, clang, f, obj, arc)
+		inputs = append(inputs, objv.File(obj))
+	}
 	c := objv.Compiler{ARC: arc}
-	err = c.Build(objv.BuildParams{
-		Output:     bin,
-		Inputs:     []objv.Input{objv.File(path)},
-		Frameworks: frameworksOf(string(src)),
-	})
-	if err != nil {
+	if err := c.Build(objv.BuildParams{
+		Output: bin, Inputs: inputs, Frameworks: p.frameworks,
+	}); err != nil {
 		t.Fatalf("objv build: %v", err)
 	}
 	return runProgram(t, bin)
 }
 
-func buildWithClang(t *testing.T, clang, path, dir string, arc bool) programRun {
+func buildWithClang(t *testing.T, clang string, p program, dir string, arc bool) programRun {
 	t.Helper()
-	src, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
 	bin := filepath.Join(dir, "clang-prog")
-	// The selector stubs are clang's calling-convention optimization for a
-	// send, not part of the ABI; objv calls objc_msgSend directly, and a
-	// link of the two together would need the stubs' symbols. Nothing about
-	// the program changes.
-	args := []string{"-fno-objc-msgsend-selector-stubs", "-Wno-everything", "-o", bin, path}
-	if arc {
-		args = append(args, "-fobjc-arc")
-	}
-	for _, f := range frameworksOf(string(src)) {
+	args := append(clangArgs(arc), "-o", bin)
+	args = append(args, p.files...)
+	for _, f := range p.frameworks {
 		args = append(args, "-framework", f)
 	}
 	if out, err := exec.Command(clang, args...).CombinedOutput(); err != nil {
@@ -156,6 +229,30 @@ func buildWithClang(t *testing.T, clang, path, dir string, arc bool) programRun 
 	}
 	return runProgram(t, bin)
 }
+
+func compileWithClang(t *testing.T, clang, src, obj string, arc bool) {
+	t.Helper()
+	args := append(clangArgs(arc), "-c", "-o", obj, src)
+	if out, err := exec.Command(clang, args...).CombinedOutput(); err != nil {
+		t.Fatalf("clang -c %s: %v\n%s", src, err, out)
+	}
+}
+
+// clangArgs is what every clang invocation here carries.
+//
+// The selector stubs are clang's calling-convention optimization for a send,
+// not part of the ABI; objv calls objc_msgSend directly, and a link of the
+// two together would need the stubs' symbols. Nothing about the program
+// changes.
+func clangArgs(arc bool) []string {
+	args := []string{"-fno-objc-msgsend-selector-stubs", "-Wno-everything"}
+	if arc {
+		args = append(args, "-fobjc-arc")
+	}
+	return args
+}
+
+func itoa(n int) string { return strconv.Itoa(n) }
 
 func runProgram(t *testing.T, bin string) programRun {
 	t.Helper()

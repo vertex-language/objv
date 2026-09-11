@@ -372,7 +372,7 @@ func TestARCCxxDestruct(t *testing.T) {
 	@end
 	@implementation Box
 	@end`)
-	mustContain(t, out, "@__i_Box__$cxx_destruct", "call @_objc_storeStrong")
+	mustContain(t, out, "@__i_Box__.cxx_destruct", "call @_objc_storeStrong")
 	// RO_HAS_CXX_STRUCTORS | RO_IS_ARC | RO_HAS_CXX_DTOR_ONLY.
 	mustContain(t, out, "{ 388,")
 }

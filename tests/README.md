@@ -122,7 +122,17 @@ point. Every other corpus tests a layer against what that layer is supposed to
 do; this one tests the compiler against a program, which is the only thing
 that finds what no layer's author thought to ask about.
 
-Each file is built in both memory models unless it says otherwise:
+A corpus entry is a file, or a **directory** of translation units linked
+together — which is a different question, and the one every single-file
+program leaves unasked: a category in one unit on a class in another, an
+`extern` global, an ivar whose offset one object file decides and another
+reads. A file inside a directory named `*.clang.m` is compiled by clang in
+*both* builds, which makes the entry an interop test: half the objects come
+from the compiler this one has to agree with, in one process, and the
+metadata the runtime walks has to be the metadata clang emitted. That is the
+only way to find a name objv spells consistently and differently.
+
+Each entry is built in both memory models unless it says otherwise:
 
 ```objc
 // mode: arc          // or mrr; the default is both
@@ -140,4 +150,4 @@ skipped without clang, because both halves of the comparison have to run.
 
 | | |
 | --- | --- |
-| `interop/` | Is what objv builds the same thing clang builds? A category compiled by clang, a class compiled by objv, one process. The metadata the runtime walks has to be the metadata clang emitted. |
+| a second architecture | Every program here is built for arm64. x86_64-macos is a target objv models and nothing runs. |

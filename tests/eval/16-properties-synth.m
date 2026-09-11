@@ -24,7 +24,7 @@
 // runtime writes when it realizes the class, which is the non-fragile ABI in
 // one instruction.
 // vir: internal func @__i_Box__name(%self ptr, %_cmd ptr) ptr {
-// vir: @_OBJC_IVAR_$_Box$_name
+// vir: @_OBJC_IVAR_$_Box._name
 // vir: i64.sload32
 
 // A property that owns its value hands it to the runtime, which is what

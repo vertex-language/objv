@@ -159,6 +159,11 @@ type unit struct {
 	classList    []ir.Symbol
 	categoryList []ir.Symbol
 
+	// And the non-lazy halves of those two: the entries that implement
+	// +load, which the runtime calls at image load rather than on demand.
+	nonLazyClassList    []ir.Symbol
+	nonLazyCategoryList []ir.Symbol
+
 	// defines is the functions this unit defines, so that a declaration of
 	// one is not imported alongside it; funcs is the definition itself.
 	defines map[string]bool
@@ -281,32 +286,17 @@ func newUnit(src *token.File, file *ast.File, info *analyzer.Info, opt Options) 
 	}
 }
 
-// sym is what an identifier is called in the object file.
+// sym is what an identifier is called in the object file: the platform's
+// prefix and the name, unchanged.
 //
-// It also spells the one Objective-C symbol VIR cannot: an instance
-// variable's offset is `OBJC_IVAR_$_Class._name`, and a VIR symbol is an
-// identifier — letters, digits, underscore and dollar. The dot becomes a
-// dollar, which the ABI's own names already use as a separator and which no
-// class or variable name may contain, so the mapping is unambiguous and
-// reversible.
-//
-// It is a limitation of the IR's symbol alphabet rather than a decision:
-// nothing about the runtime wants this, and an object writer that emitted
-// the dot would be emitting what clang does. The other name in the same
-// position — a method's `-[Class selector]` — is handled where it is built,
-// by runtime.MethodSymbol.
-func (u *unit) sym(name string) string {
-	out := make([]byte, 0, len(name)+len(u.symPrefix))
-	out = append(out, u.symPrefix...)
-	for i := 0; i < len(name); i++ {
-		if name[i] == '.' {
-			out = append(out, '$')
-			continue
-		}
-		out = append(out, name[i])
-	}
-	return string(out)
-}
+// Unchanged is the point. An instance variable's offset is
+// `OBJC_IVAR_$_Class._name` with a dot in it, and objv used to write a
+// dollar there because a VIR symbol had the alphabet of an identifier. The
+// result was self-consistent and wrong: every reference objv emitted matched
+// every definition objv emitted, and neither matched the ones clang wrote —
+// so a class compiled by one compiler and subclassed by the other did not
+// link. A VIR symbol now carries the dot.
+func (u *unit) sym(name string) string { return u.symPrefix + name }
 
 func (u *unit) name(id *ast.Ident) string {
 	if id == nil {

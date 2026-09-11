@@ -170,6 +170,15 @@ const (
 	ClassListLabel    = "l_OBJC_LABEL_CLASS_$"
 	CategoryListLabel = "l_OBJC_LABEL_CATEGORY_$"
 	ImageInfoLabel    = "L_OBJC_IMAGE_INFO"
+
+	// And the non-lazy lists, which hold the entries that implement +load.
+	NonLazyClassListLabel    = "l_OBJC_LABEL_NONLAZY_CLASS_$"
+	NonLazyCategoryListLabel = "l_OBJC_LABEL_NONLAZY_CATEGORY_$"
+
+	// LoadSelector is the one selector the runtime sends without being
+	// asked: every class and category that implements it is sent +load
+	// when the image is mapped, before main and before any message.
+	LoadSelector = "load"
 )
 
 // The references a translation unit makes, which the runtime rewrites at
