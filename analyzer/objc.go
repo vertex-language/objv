@@ -27,7 +27,7 @@ func (c *checker) declareObjC(d ast.Decl) {
 
 	case *ast.ProtocolForwardDecl:
 		for _, n := range d.Names {
-			c.protocol(c.name(n))
+			c.protocol(c.name(n)).Declared = true
 		}
 
 	case *ast.ClassInterfaceDecl:
@@ -52,6 +52,7 @@ func (c *checker) declareObjC(d ast.Decl) {
 
 	case *ast.ProtocolDecl:
 		p := c.protocol(c.name(d.Name))
+		p.Declared = true
 		p.Inherited = append(p.Inherited, c.adopted(d.Protocols)...)
 
 	case *ast.CompatAliasDecl:

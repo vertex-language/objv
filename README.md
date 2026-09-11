@@ -157,12 +157,13 @@ Commands use verb-first dispatch:
 
 | Command | Description |
 |---|---|
-| `objv build` | Compile and link input files into an executable or library |
+| `objv build` | Compile and link input files into an executable |
 | `objv run` | Compile, link to a temporary binary, execute, and forward the exit code |
 | `objv check` | Parse, validate types, and run semantic checks without writing an artifact |
 | `objv ast` | Parse input files and print the generated syntax tree |
 | `objv tokens` | Tokenize the input stream and dump tokens with source positions |
-| `objv env` | Print active target settings, framework paths, and predefined macros |
+| `objv env` | Print active target settings, the SDK, search paths, and predefined macros |
+| `objv version` | Print the compiler's version |
 
 ### Target artifact control (`--emit`)
 
@@ -175,7 +176,16 @@ The `--emit` flag specifies the terminal stage of compilation:
 | `--emit vir` | Lowered Vertex Intermediate Representation |
 | `--emit mi` | Preprocessed Objective-C source |
 
-Standard compiler options apply: `-o`, `-I`, `-F`, `-D`, `-U`, `-L`, `-l`, `-framework`, and `-static`.
+Standard compiler options apply: `-o`, `-I`, `-F`, `-D`, `-U`, `-L`, `-l`,
+`-framework`, `-include`, `-isysroot` and `-static`, plus
+`-fobjc-arc` (automatic reference counting), `-mmacosx-version-min`
+(the oldest macOS the build runs on) and `-freestanding` (objv's builtin
+headers alone).
+
+A file of `-`, or no file, reads standard input — except for `objv run`,
+whose program inherits standard input and so cannot take its source from
+there. `-pp` and `-no-pp` override what the extension says about
+preprocessing.
 
 ---
 

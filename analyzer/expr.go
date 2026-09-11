@@ -290,10 +290,20 @@ func (c *checker) identType(id *ast.Ident) types.Type {
 	if k, ok := c.classes[name]; ok {
 		return c.classObjectType(k)
 	}
-	if IsCompilerBuiltin(name) {
-		return nil
+	// A builtin is the compiler's own function, and builtin.go says which
+	// ones objv has. One it does not have is named here rather than left
+	// untyped, because the phases below cannot name it.
+	if t := builtinType(name); t != nil {
+		return t
 	}
 	if c.quiet > 0 {
+		return nil
+	}
+	if IsCompilerBuiltin(name) {
+		if !c.undeclared[name] {
+			c.undeclared[name] = true
+			c.report(id, "objv does not implement '"+name+"'")
+		}
 		return nil
 	}
 	if !c.undeclared[name] {
@@ -311,8 +321,9 @@ func (c *checker) classObjectType(k *types.Class) types.Type {
 
 // IsCompilerBuiltin reports whether a name belongs to the compiler rather
 // than to any declaration. A program cannot declare one — every spelling is
-// reserved — so treating an unknown one as declared costs nothing, and lower
-// reports the ones it does not implement by name.
+// reserved — so a name with this shape and nothing behind it is a builtin
+// objv has not implemented, which is a different thing to say than that the
+// program used an undeclared identifier.
 func IsCompilerBuiltin(name string) bool {
 	return strings.HasPrefix(name, "__builtin_") ||
 		strings.HasPrefix(name, "__sync_") ||
@@ -413,6 +424,12 @@ func (c *checker) subscriptSend(e *ast.IndexExpr, recv, index types.Type, assign
 // production and a different thing.
 func (c *checker) callType(e *ast.CallExpr) types.Type {
 	fnT := c.rvalue(e.Fun)
+	// The one call whose value is known here. Recorded so that lower emits
+	// the answer rather than its own conservative one, and so that a header
+	// that puts it in a constant context gets the same answer twice.
+	if v, ok := c.evalInt(e); ok {
+		c.info.Consts[e] = v
+	}
 	args := make([]types.Type, len(e.Args))
 	for i, a := range e.Args {
 		args[i] = c.rvalue(a)
@@ -818,7 +835,14 @@ func (c *checker) assignType(e *ast.AssignExpr) types.Type {
 		recv := c.rvalue(ix.X)
 		if types.IsObjectPointer(recv) {
 			index := c.rvalue(ix.Index)
-			c.subscriptSend(ix, recv, index, true)
+			// The type this bracket gets is the setter's parameter, not the
+			// getter's return: the subscript is a store here, and the two
+			// selectors are unrelated methods that need not agree. Recording
+			// it is this path's job because it is the one path that types an
+			// IndexExpr without going through expr.
+			if t := c.subscriptSend(ix, recv, index, true); t != nil {
+				c.info.Types[ix] = t
+			}
 			return c.rvalue(e.Rhs)
 		}
 	}

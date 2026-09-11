@@ -1,9 +1,45 @@
 /* <limits.h> — C11 §5.2.4.2.1. Values from the target model's
  * predefines; the derived ones (MIN, unsigned MAX) are spelled so
  * they stay correct integer constant expressions usable in #if.
+ *
+ * The platform's own limits.h comes first and this one has the last
+ * word, which is the arrangement clang uses and the only one that
+ * works. A hosted <limits.h> carries far more than §5.2.4.2.1 --
+ * POSIX's PATH_MAX, OPEN_MAX, and a hundred more -- and a program
+ * that includes <limits.h> wants those too. What it must not get is
+ * the platform's idea of how wide an int is, since that is the
+ * compiler's to state: Darwin's arm/limits.h defines CHAR_BIT itself,
+ * and letting it stand means a redefinition warning at best and a
+ * disagreement with the type model at worst.
+ *
+ * So: include theirs, then undefine and restate ours.
  */
 #ifndef _OBJV_LIMITS_H
 #define _OBJV_LIMITS_H
+
+#if __STDC_HOSTED__ && __has_include_next(<limits.h>)
+#include_next <limits.h>
+#endif
+
+#undef CHAR_BIT
+#undef SCHAR_MAX
+#undef SCHAR_MIN
+#undef UCHAR_MAX
+#undef CHAR_MIN
+#undef CHAR_MAX
+#undef SHRT_MAX
+#undef SHRT_MIN
+#undef USHRT_MAX
+#undef INT_MAX
+#undef INT_MIN
+#undef UINT_MAX
+#undef LONG_MAX
+#undef LONG_MIN
+#undef ULONG_MAX
+#undef LLONG_MAX
+#undef LLONG_MIN
+#undef ULLONG_MAX
+#undef MB_LEN_MAX
 
 #define CHAR_BIT   __CHAR_BIT__
 

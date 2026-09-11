@@ -133,7 +133,7 @@ type categoryImpl struct {
 
 // emitMetadata writes everything the runtime reads.
 func (u *unit) emitMetadata() {
-	if len(u.impls) == 0 && len(u.categories) == 0 {
+	if !u.hasObjC() {
 		return
 	}
 	for _, k := range u.impls {
@@ -495,6 +495,28 @@ func (u *unit) emitCategory(c categoryImpl) {
 			ir.Lit(ir.Int(0)), // the reserved word
 		))
 	u.categoryList = append(u.categoryList, g)
+}
+
+// hasObjC reports whether this unit put anything in the image that libobjc
+// has to read.
+//
+// The image info word is what tells the runtime an image is one of its own:
+// map_images walks the images that have one and skips the images that do
+// not. A unit that only *sends* a message defines no class and so once fell
+// outside this — and its selector references were never replaced by the
+// uniqued SEL, so they still held the address of the method-name string the
+// compiler wrote, and the first send failed with
+//
+//	NSForwarding: warning: selector (0x104a786e1) for message 'length'
+//	does not match selector known to Objective C runtime
+//
+// which names the symptom and not one thing about the cause. Every pool
+// below is a fixup the runtime owes this image, so any of them being
+// non-empty is the condition.
+func (u *unit) hasObjC() bool {
+	return len(u.impls) > 0 || len(u.categories) > 0 ||
+		len(u.selRefs) > 0 || len(u.classRefs) > 0 ||
+		len(u.superRefs) > 0 || len(u.protoSyms) > 0
 }
 
 // emitImageInfo writes the two words every image carries, and the lists the

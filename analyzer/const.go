@@ -175,6 +175,27 @@ func (c *checker) evalInt(e ast.Expr) (int64, bool) {
 		}
 		return int64(u), true
 
+	case *ast.CallExpr:
+		// __builtin_constant_p is the one call that is a constant
+		// expression: it asks whether its operand is one, which is a
+		// question about the program and not about any value. gcc and clang
+		// both answer it in the front end, which is why <libkern/
+		// OSByteOrder.h> can write
+		//
+		//	if (__builtin_constant_p(x)) return CONST_SWAP(x);
+		//
+		// and expect the fold. The operand is not evaluated: §6.6 does not
+		// reach inside, and the answer for an operand with a side effect is
+		// "no" anyway.
+		if id, ok := stripParens(e.Fun).(*ast.Ident); ok &&
+			c.name(id) == "__builtin_constant_p" && len(e.Args) == 1 {
+			if _, ok := c.evalInt(e.Args[0]); ok {
+				return 1, true
+			}
+			return 0, true
+		}
+		return 0, false
+
 	case *ast.SizeofExpr:
 		var t types.Type
 		if e.Type != nil {

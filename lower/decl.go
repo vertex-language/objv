@@ -82,9 +82,19 @@ func (u *unit) at() bool { return u.fn != nil && u.fn.cur != nil }
 // has to reach the same one the definition fills in.
 func (u *unit) declareFile() {
 	for _, d := range u.file.Decls {
-		if fd, ok := d.(*ast.FuncDecl); ok && fd.Body != nil && fd.Name != nil {
-			u.defines[u.name(fd.Name)] = true
+		fd, ok := d.(*ast.FuncDecl)
+		if !ok || fd.Body == nil || fd.Name == nil {
+			continue
 		}
+		name := u.name(fd.Name)
+		// A definition this unit will not emit is not a definition to
+		// declare: a symbol created here and never given a body is a
+		// module the verifier rejects. See notEmitted.
+		if u.notEmitted(name, fd) {
+			u.omitted[name] = true
+			continue
+		}
+		u.defines[name] = true
 	}
 	for _, d := range u.file.Decls {
 		switch d := d.(type) {
@@ -153,30 +163,39 @@ func (u *unit) declareGlobalVar(name string, t types.Type, sp declSpec, at ast.N
 	}
 	f, ok := u.ftype(t)
 	if !ok {
-		u.unsupported(at, "a global of type "+t.String())
+		// Same rule as a function declaration: <dispatch/queue.h> declares
+		// _dispatch_main_q as a struct dispatch_queue_s, which is opaque
+		// and has no VIR type, and every Objective-C program on Darwin
+		// reads that declaration and no program reads that object.
+		u.undescribed[name] = "a global of type " + t.String()
 		return
 	}
 
-	var s ir.Symbol
 	if sp.storage == token.EXTERN {
-		s = u.mod.ImportGlobal(u.sym(name), f)
-	} else {
-		g := u.mod.Global(u.sym(name), ir.RW, f)
-		if sp.storage == token.STATIC {
-			g.Internal()
-		} else {
-			g.Export()
-		}
-		_, align := u.sizeAlign(t)
-		g.Align(align)
-		s = g
+		u.top.names[name] = &storage{kind: stGlobal, typ: t,
+			imp: &pendingImport{sym: u.sym(name), ftyp: f}}
+		return
 	}
-	u.top.names[name] = &storage{kind: stGlobal, typ: t, sym: s}
+	g := u.mod.Global(u.sym(name), ir.RW, f)
+	if sp.storage == token.STATIC {
+		g.Internal()
+	} else {
+		g.Export()
+	}
+	_, align := u.sizeAlign(t)
+	g.Align(align)
+	u.top.names[name] = &storage{kind: stGlobal, typ: t, sym: g}
 }
 
 func (u *unit) declareFunc(d *ast.FuncDecl) {
 	t := u.typeOf(d)
 	if t == nil || d.Name == nil {
+		return
+	}
+	// A name whose definition this unit omitted gets nothing at all --
+	// not even the import a prototype would otherwise produce, which
+	// would name a symbol no object file has. See notEmitted.
+	if u.omitted[u.name(d.Name)] {
 		return
 	}
 	u.declareFuncName(u.name(d.Name), t, d)
@@ -190,19 +209,24 @@ func (u *unit) declareFuncName(name string, t types.Type, at ast.Node) {
 	if !ok {
 		return
 	}
-	sig, ok := u.sigOf(ft, at)
-	if !ok {
+	sig, why := u.sigOf(ft)
+	if why != "" {
+		// A declaration is not a demand. Darwin's headers declare a great
+		// many functions this compiler cannot call -- <_stdlib.h> has
+		// div(), which returns a struct by value -- and a program that
+		// never calls one wants nothing from it. Keep the reason and
+		// report it if a use turns up. See undescribed.
+		u.undescribed[name] = why
 		return
 	}
-	var sym ir.Symbol
 	if u.defines[name] {
 		fn := u.mod.Func(u.sym(name))
 		u.funcs[name] = fn
-		sym = fn
-	} else {
-		sym = u.mod.ImportFunc(u.sym(name), sig)
+		u.top.names[name] = &storage{kind: stFunc, typ: t, sym: fn}
+		return
 	}
-	u.top.names[name] = &storage{kind: stFunc, typ: t, sym: sym}
+	u.top.names[name] = &storage{kind: stFunc, typ: t,
+		imp: &pendingImport{sym: u.sym(name), sig: sig}}
 }
 
 // sigOf builds a signature. A parameter or a return value that is not held
@@ -210,17 +234,19 @@ func (u *unit) declareFuncName(name string, t types.Type, at ast.Node) {
 // in which registers, and which goes in memory — and objv does not have them
 // yet, so a function that takes or returns one is refused rather than
 // mis-called.
-func (u *unit) sigOf(ft *types.Func, at ast.Node) (*ir.Sig, bool) {
+//
+// The refusal is a *reason*, not a diagnostic, because the same signature is
+// built for a declaration and for a call and only one of those is worth
+// reporting. See describeSig.
+func (u *unit) sigOf(ft *types.Func) (*ir.Sig, string) {
 	sig := ir.NewSig()
 	for _, p := range ft.Params {
 		if isAggregate(p.Type) {
-			u.unsupported(at, "a function taking a struct or union by value")
-			return nil, false
+			return nil, "a function taking a struct or union by value"
 		}
 		r, ok := u.reg(p.Type)
 		if !ok {
-			u.unsupported(at, "a parameter of type "+p.Type.String())
-			return nil, false
+			return nil, "a parameter of type " + p.Type.String()
 		}
 		sig.Param(r)
 	}
@@ -229,17 +255,15 @@ func (u *unit) sigOf(ft *types.Func, at ast.Node) (*ir.Sig, bool) {
 	}
 	if !types.IsVoid(ft.Ret) {
 		if isAggregate(ft.Ret) {
-			u.unsupported(at, "a function returning a struct or union")
-			return nil, false
+			return nil, "a function returning a struct or union"
 		}
 		r, ok := u.reg(ft.Ret)
 		if !ok {
-			u.unsupported(at, "a return type of "+ft.Ret.String())
-			return nil, false
+			return nil, "a return type of " + ft.Ret.String()
 		}
 		sig.Ret(r)
 	}
-	return sig, true
+	return sig, ""
 }
 
 // ---- pass two: define ----
@@ -297,12 +321,22 @@ func (u *unit) defineFunc(d *ast.FuncDecl) {
 		return
 	}
 	name := u.name(d.Name)
+	if u.notEmitted(name, d) {
+		return
+	}
 	fn := u.funcs[name]
 	if fn == nil {
 		fn = u.mod.Func(u.sym(name))
 		u.funcs[name] = fn
 	}
-	if u.isStatic(d) {
+	// An inline definition is emitted internal, not exported. §6.7.4p7 says
+	// it provides no external definition, so the one unit that wrote
+	// `extern inline int f(void);` owns the name -- and every other unit
+	// that used the function would collide with it, and with each other,
+	// if this exported a second `_f`. C99 does not promise the two are the
+	// same function, only that both behave the same way, so a private copy
+	// per unit is conforming and is what links.
+	if u.isStatic(d) || u.isInlineDefinition(name, d) {
 		fn.Internal()
 	} else {
 		fn.Export()
@@ -310,6 +344,24 @@ func (u *unit) defineFunc(d *ast.FuncDecl) {
 	u.top.names[name] = &storage{kind: stFunc, typ: t, sym: fn}
 
 	u.buildBody(fn, ft, paramNames(d), d.Body, nil)
+}
+
+// notEmitted reports whether a definition this unit read is one it does not
+// owe an object file.
+//
+// A static function nothing here mentions cannot be called from anywhere, and
+// an inline definition provides no external definition (§6.7.4p7), so both are
+// emitted only when used. See useset.go for why that is not an optimization:
+// Apple's <math.h> and <objc/objc.h> define inline functions in terms of
+// builtins objv does not implement, and one #import brings in dozens.
+func (u *unit) notEmitted(name string, d *ast.FuncDecl) bool {
+	if !u.isStatic(d) && !u.isInlineDefinition(name, d) {
+		return false
+	}
+	if u.used == nil {
+		u.used = u.planUsed()
+	}
+	return !u.used[name]
 }
 
 func (u *unit) isStatic(d *ast.FuncDecl) bool {

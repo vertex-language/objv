@@ -7,6 +7,22 @@
 #ifndef _OBJV_STDINT_H
 #define _OBJV_STDINT_H
 
+/* The platform's own stdint.h first, when there is one: a hosted header
+   carries far more than the standard requires -- Darwin's brings
+   rsize_t, errno_t, and the __darwin machinery every other system
+   header is written against -- and a program that includes it wants
+   those too. What follows fills in only what the platform left out,
+   so nothing here contradicts it. */
+#if __STDC_HOSTED__ && __has_include_next(<stdint.h>)
+#include_next <stdint.h>
+#endif
+
+/* A platform that has its own <stdint.h> has all of it, and its types are
+   the ones every other system header on that platform is written against.
+   Everything below is for a target with none: describing the same widths a
+   second time can only disagree. */
+#ifndef INTPTR_MAX
+
 #if __CHAR_BIT__ != 8
 #error "<stdint.h> expects an 8-bit byte; no current target model has another"
 #endif
@@ -135,5 +151,7 @@ typedef __UINTMAX_TYPE__ uintmax_t;
 #define UINT64_C(v)  v ## ULL
 #define INTMAX_C(v)  v ## LL
 #define UINTMAX_C(v) v ## ULL
+
+#endif /* INTPTR_MAX */
 
 #endif

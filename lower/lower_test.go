@@ -71,7 +71,9 @@ func TestEmptyUnitStillProducesAModule(t *testing.T) {
 // symbol, and the platform that wants the underscore wants it on every C
 // identifier, static ones included.
 func TestSymbolPrefix(t *testing.T) {
-	src := "int f(void) { return 0; }\nstatic int g(void) { return 1; }\n"
+	// f calls g so that g is emitted at all: a static function nothing
+	// mentions is not in the module to have a symbol.
+	src := "static int g(void) { return 1; }\nint f(void) { return g(); }\n"
 	with, _ := build(t, src)
 	mustContain(t, with, "@_f", "@_g")
 

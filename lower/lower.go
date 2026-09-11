@@ -136,6 +136,19 @@ type unit struct {
 	defines map[string]bool
 	funcs   map[string]*ir.Func
 
+	// omitted is the definitions notEmitted refused, by name. They are not
+	// imports either: an import is a promise the linker has to keep, and
+	// there is no symbol anywhere for an unused static function. Nothing
+	// references one, because a reference is exactly what would have put it
+	// in the used set.
+	omitted map[string]bool
+
+	// undescribed is a file-scope name lower could give no VIR type, and
+	// the reason. Nothing is reported when the declaration is read: a
+	// system header declares far more than any one program uses, and the
+	// place a missing type actually costs the user something is the use.
+	undescribed map[string]string
+
 	// ivarSyms are the offset variables, by symbol name. A body reads one
 	// before the metadata pass writes it, and both need the same symbol.
 	ivarSyms map[string]ir.Symbol
@@ -148,6 +161,11 @@ type unit struct {
 	// protoSyms are the protocol objects this unit emitted, by name. A
 	// protocol is emitted on first mention and coalesced at link time.
 	protoSyms map[string]ir.Symbol
+
+	// used is which conditional definitions this unit emits — see
+	// useset.go. Nil until asked for, because a unit with no static or
+	// inline definition never needs the walk.
+	used useSet
 
 	symPrefix string
 	warned    map[string]bool
@@ -186,12 +204,15 @@ func newUnit(src *token.File, file *ast.File, info *analyzer.Info, opt Options) 
 		externs:   map[string]*ir.FuncImport{},
 		classSyms: map[string]ir.Symbol{},
 		defines:   map[string]bool{},
-		ivarSyms:  map[string]ir.Symbol{},
-		records:   map[*types.Record]*ir.Type{},
-		protoSyms: map[string]ir.Symbol{},
-		funcs:     map[string]*ir.Func{},
-		symPrefix: opt.SymbolPrefix,
-		warned:    map[string]bool{},
+		omitted:   map[string]bool{},
+
+		undescribed: map[string]string{},
+		ivarSyms:    map[string]ir.Symbol{},
+		records:     map[*types.Record]*ir.Type{},
+		protoSyms:   map[string]ir.Symbol{},
+		funcs:       map[string]*ir.Func{},
+		symPrefix:   opt.SymbolPrefix,
+		warned:      map[string]bool{},
 	}
 }
 
@@ -231,7 +252,20 @@ func (u *unit) name(id *ast.Ident) string {
 
 // typeOf is the type analysis gave a node. A nil answer means analysis said
 // nothing, which happens only on a tree it already reported on.
-func (u *unit) typeOf(n ast.Node) types.Type { return u.info.Types[n] }
+// typeOf is the type analysis recorded for a node.
+//
+// A miss is a lower bug or an analyzer bug, never user error: every node this
+// is asked about is one Info documents itself as covering. It reports and
+// yields int so that emission continues and the reader sees one diagnostic
+// naming the construct, rather than a nil dereference that takes the process
+// down and names nothing.
+func (u *unit) typeOf(n ast.Node) types.Type {
+	if t, ok := u.info.Types[n]; ok && t != nil {
+		return t
+	}
+	u.errorf(n, "internal: no type recorded for %T", n)
+	return types.Typ(types.Int)
+}
 
 func (u *unit) errorf(n ast.Node, format string, a ...any) {
 	pos, end := token.NoPos, token.NoPos

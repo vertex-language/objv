@@ -382,3 +382,58 @@ func TestIntegerSuffixDiagnostic(t *testing.T) {
 		}
 	}
 }
+
+// ---- the compiler's own functions ----
+
+// A builtin objv has is typed like any other function, so the expressions
+// built on a call to one are typed too. A builtin it does not have is named,
+// once: the alternative is an untyped call, and the phases below report the
+// operators rather than the cause.
+func TestBuiltinsAreTypedOrNamed(t *testing.T) {
+	_, _, info := clean(t, 0, `
+	double widen(float x) { return __builtin_fabsf(x) + __builtin_sqrt(2.0); }
+	int count(unsigned v) { return __builtin_popcount(v) + __builtin_clz(v); }`)
+	if len(info.Types) == 0 {
+		t.Fatal("nothing was typed")
+	}
+
+	wantError(t, 0, `int f(double x) { return __builtin_frobnicate(x); }`,
+		"objv does not implement '__builtin_frobnicate'")
+}
+
+// Reported once per name, however many times the program writes it: a header
+// that defines a dozen functions in terms of one builtin should say one thing.
+func TestUnimplementedBuiltinIsReportedOnce(t *testing.T) {
+	_, _, _, ds := check(t, 0, `
+	int a(void) { return __builtin_frobnicate(1); }
+	int b(void) { return __builtin_frobnicate(2); }`)
+	n := 0
+	for _, m := range errs(ds) {
+		if strings.Contains(m, "__builtin_frobnicate") {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("reported %d times, want 1: %v", n, errs(ds))
+	}
+}
+
+// §6.6: __builtin_constant_p is a constant expression, and the analyzer is
+// where the answer is decided so that lower cannot give a different one.
+func TestConstantPFolds(t *testing.T) {
+	_, _, info := clean(t, 0, `
+	int yes(void) { return __builtin_constant_p(2 + 3); }
+	int no(int x) { return __builtin_constant_p(x); }`)
+	got := map[int64]bool{}
+	for e, v := range info.Consts {
+		if _, ok := e.(*ast.CallExpr); ok {
+			got[v] = true
+		}
+	}
+	if !got[1] {
+		t.Error("__builtin_constant_p(2 + 3) did not fold to 1")
+	}
+	if !got[0] {
+		t.Error("__builtin_constant_p(x) did not fold to 0")
+	}
+}

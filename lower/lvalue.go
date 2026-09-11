@@ -66,7 +66,7 @@ func (u *unit) identAddr(id *ast.Ident) (*ir.Ptr, types.Type) {
 		p := st.addr
 		return &p, st.typ
 	case stGlobal, stFunc:
-		p := u.fn.cur.Ptr.GetAddr(st.sym)
+		p := u.fn.cur.Ptr.GetAddr(u.symOf(st))
 		return &p, st.typ
 	case stIvar:
 		p := u.ivarAddr(st.class, st.ivar)

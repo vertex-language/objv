@@ -310,7 +310,9 @@ func (c *checker) Object(spec *ast.ObjectType) types.Type {
 	if spec.Protocols != nil {
 		for _, n := range spec.Protocols.Names {
 			p := c.protocol(c.name(n))
-			if !p.Complete {
+			// Declared anywhere in the unit, which is what §4.3's forward
+			// form is for — not defined above this point.
+			if !p.Declared {
 				c.warn(n, "protocol '"+p.Name+"' is used before it is declared")
 			}
 			o.Protocols = append(o.Protocols, p)

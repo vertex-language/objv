@@ -83,9 +83,9 @@ func (u *unit) recordType(r *types.Record) (*ir.Type, bool) {
 		name = "union_" + r.Name
 	}
 	if r.Name == "" {
-		name = u.uniq("anon")
+		name = u.uniqType("anon")
 	} else if u.mod.LookupType(name) != nil {
-		name = u.uniq(name)
+		name = u.uniqType(name)
 	}
 
 	fields := make([]ir.Field, 0, len(r.Fields))
@@ -136,4 +136,21 @@ func (u *unit) recordType(r *types.Record) (*ir.Type, bool) {
 	}
 	u.records[r] = t
 	return t, true
+}
+
+// uniqType numbers a type name until the module has no such type.
+//
+// The separator is '_' where uniq's is '.', because these two names live in
+// different namespaces with different rules: a symbol is written through sym,
+// which maps '.' to the '$' a linker accepts, and a type name is written bare
+// in the IR text and has to be an identifier there. A type that reached VIR
+// as "anon.2" was rejected by the module, not by the assembler.
+func (u *unit) uniqType(prefix string) string {
+	for {
+		u.anon++
+		name := prefix + "_" + itoa(u.anon)
+		if u.mod.LookupType(name) == nil {
+			return name
+		}
+	}
 }

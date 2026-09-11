@@ -224,6 +224,10 @@ func (u *unit) identValue(id *ast.Ident, t types.Type) ir.Value {
 	name := u.name(id)
 	st := u.lookup(name)
 	if st == nil {
+		if why := u.undescribed[name]; why != "" {
+			u.unsupported(id, why)
+			return nil
+		}
 		u.errorf(id, "internal: '"+name+"' reached lowering undeclared")
 		return nil
 	}
@@ -231,9 +235,9 @@ func (u *unit) identValue(id *ast.Ident, t types.Type) ir.Value {
 	case stEnum:
 		return u.constOf(st.value, t)
 	case stFunc:
-		return u.fn.cur.Ptr.GetAddr(st.sym)
+		return u.fn.cur.Ptr.GetAddr(u.symOf(st))
 	case stGlobal:
-		p := u.fn.cur.Ptr.GetAddr(st.sym)
+		p := u.fn.cur.Ptr.GetAddr(u.symOf(st))
 		if isAggregate(st.typ) {
 			return p
 		}
@@ -984,6 +988,13 @@ func (u *unit) incDec(x ast.Expr, op token.Kind, t types.Type, postfix bool) ir.
 
 // call lowers a function call, and a block invocation.
 func (u *unit) call(e *ast.CallExpr, t types.Type) ir.Value {
+	// A builtin is not a call and never reaches a symbol, so it is answered
+	// before anything here looks for one. See builtin.go.
+	if id, ok := stripParens(e.Fun).(*ast.Ident); ok {
+		if v, handled := u.builtinCall(u.name(id), e); handled {
+			return v
+		}
+	}
 	ft := u.typeOf(e.Fun)
 	if types.IsBlock(ft) {
 		u.unsupported(e, "calling a block")
@@ -1018,7 +1029,7 @@ func (u *unit) call(e *ast.CallExpr, t types.Type) ir.Value {
 	// through a pointer, which the IR wants a type for.
 	if id, ok := stripParens(e.Fun).(*ast.Ident); ok {
 		if st := u.lookup(u.name(id)); st != nil && st.kind == stFunc {
-			if callee, ok := st.sym.(ir.Callee); ok {
+			if callee, ok := u.symOf(st).(ir.Callee); ok {
 				res := u.fn.cur.Call(callee, args...)
 				if types.IsVoid(fn.Ret) || res.Len() == 0 {
 					return nil

@@ -139,6 +139,20 @@ func (c *checker) checkGenDecl(d *ast.GenDecl, external bool) {
 				c.checkAssign(id.Init, t, init, "initializing")
 			}
 		}
+		// §6.7.9p4: an object with static storage duration is initialized
+		// by a constant expression, and §6.6 says what one is. Folding it
+		// here is what keeps a single evaluator in the compiler: `-1` is an
+		// operator applied to a literal, and a phase that knows only
+		// literals cannot initialize `static const CFIndex kCFNotFound =
+		// -1;`, which <CFBase.h> writes and every Objective-C program on
+		// Darwin reads. Nothing is reported when it does not fold — an
+		// address constant is equally valid there and is not an integer,
+		// and at block scope an initializer need not be constant at all.
+		if id.Init != nil && sym.kind == symObject && types.IsInteger(t) {
+			if v, ok := c.evalInt(id.Init); ok {
+				c.info.Consts[id.Init] = v
+			}
+		}
 	}
 }
 

@@ -1,9 +1,59 @@
 /* <float.h> — C11 §5.2.4.2.2. Pure renaming: every value is a fact
  * about the target's floating formats, computed by cmd/objv from the
  * Model and handed in as a predefine.
+ *
+ * The platform's own float.h comes first and this one has the last
+ * word, for the reason limits.h gives: a hosted header carries more
+ * than the standard requires and a program including it wants that
+ * too, but how wide a double is belongs to the compiler.
  */
 #ifndef _OBJV_FLOAT_H
 #define _OBJV_FLOAT_H
+
+#if __STDC_HOSTED__ && __has_include_next(<float.h>)
+#include_next <float.h>
+#endif
+
+#undef FLT_ROUNDS
+#undef FLT_EVAL_METHOD
+#undef FLT_RADIX
+#undef DECIMAL_DIG
+#undef FLT_MANT_DIG
+#undef DBL_MANT_DIG
+#undef LDBL_MANT_DIG
+#undef FLT_DIG
+#undef DBL_DIG
+#undef LDBL_DIG
+#undef FLT_MIN_EXP
+#undef DBL_MIN_EXP
+#undef LDBL_MIN_EXP
+#undef FLT_MIN_10_EXP
+#undef DBL_MIN_10_EXP
+#undef LDBL_MIN_10_EXP
+#undef FLT_MAX_EXP
+#undef DBL_MAX_EXP
+#undef LDBL_MAX_EXP
+#undef FLT_MAX_10_EXP
+#undef DBL_MAX_10_EXP
+#undef LDBL_MAX_10_EXP
+#undef FLT_MAX
+#undef DBL_MAX
+#undef LDBL_MAX
+#undef FLT_EPSILON
+#undef DBL_EPSILON
+#undef LDBL_EPSILON
+#undef FLT_MIN
+#undef DBL_MIN
+#undef LDBL_MIN
+#undef FLT_TRUE_MIN
+#undef DBL_TRUE_MIN
+#undef LDBL_TRUE_MIN
+#undef FLT_HAS_SUBNORM
+#undef DBL_HAS_SUBNORM
+#undef LDBL_HAS_SUBNORM
+#undef FLT_DECIMAL_DIG
+#undef DBL_DECIMAL_DIG
+#undef LDBL_DECIMAL_DIG
 
 #define FLT_ROUNDS      1
 #define FLT_EVAL_METHOD __FLT_EVAL_METHOD__

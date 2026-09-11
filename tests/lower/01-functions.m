@@ -8,8 +8,18 @@ int twice(int x) { return x * 2; }
 // vir: export func @_twice(%x i32) i32
 // vir: i32.mul
 
+// A static function is emitted when this unit calls it, and not otherwise.
+// The symbol is internal, so nothing outside the unit can reach it, and a
+// definition nobody here names is text in the object with no way in. That
+// rule is not an optimisation: it is what makes a header full of `static
+// inline` definitions -- Apple's <math.h> is dozens of them -- cost only
+// what the program actually uses.
 static int hidden(int x) { return x + 1; }
+int reaches_hidden(int x) { return hidden(x); }
 // vir: internal func @_hidden
+
+static int never_called(int x) { return x - 1; }
+// vir-not: @_never_called
 
 long widen(int a, unsigned b, long c) {
     // §6.3.1.8: both operands reach their common type before the operator.

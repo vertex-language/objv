@@ -219,6 +219,10 @@ func (c *Compiler) config() (preprocessor.Config, sysroot.Result, error) {
 		c.res = r
 
 		cfg := t.ppConfig(r)
+		// __STDC_HOSTED__, which the builtin headers read: a hosted
+		// <limits.h> defers to the platform's and a freestanding one is
+		// the whole of what there is.
+		cfg.Hosted = !c.Freestanding
 
 		// -I and -F precede everything sysroot found. A caller's directory
 		// is not System: a warning in one is theirs to see every time.

@@ -52,7 +52,24 @@ type Class struct {
 // Protocol is an Objective-C protocol. Like a class it has identity, and
 // like a class it may be forward-declared and incomplete.
 type Protocol struct {
-	Name       string
+	Name string
+
+	// Declared records that the unit declared this protocol somewhere, in
+	// either of the two forms §4.3 admits: `@protocol P;` or a definition.
+	// Complete records that it has a body.
+	//
+	// The two are separate because a use only needs the first, and needs it
+	// from anywhere in the unit rather than from above. Foundation writes
+	//
+	//	@protocol NSFileManagerDelegate;
+	//	@interface NSFileManager : NSObject
+	//	@property id <NSFileManagerDelegate> delegate;
+	//	@end
+	//	@protocol NSFileManagerDelegate ... @end
+	//
+	// twenty-one times, and reading "declared" as "complete here" warns on
+	// every one of them.
+	Declared   bool
 	Complete   bool
 	Inherited  []*Protocol
 	Methods    []*Method

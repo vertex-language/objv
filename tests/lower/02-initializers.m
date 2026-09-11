@@ -34,3 +34,11 @@ int locals(void) {
 // vir: memset
 // vir: memcpy
 // vir: internal global rw @_static$once
+
+// A struct with no tag still needs a name in VIR, where every struct type
+// has one. It is numbered, and the number is not written with a '.': a type
+// name is written bare in the IR text and has to be an identifier there,
+// where a symbol goes through a mapping that accepts one.
+struct { int x, y; } point = { 3, 4 };
+// vir: internal type @anon_
+// vir: export global rw @_point @anon_

@@ -68,10 +68,11 @@ func (u *unit) constAddress(e ast.Expr) (ir.Init, bool) {
 		}
 	case *ast.Ident:
 		st := u.lookup(u.name(e))
-		if st == nil || st.sym == nil {
+		sym := u.symOf(st)
+		if sym == nil {
 			return ir.Init{}, false
 		}
-		return ir.RelocInit(st.sym), true
+		return ir.RelocInit(sym), true
 	case *ast.StringLit:
 		if sym := u.stringSymbol(e); sym != nil {
 			return ir.RelocInit(sym), true

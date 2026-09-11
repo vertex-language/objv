@@ -39,11 +39,32 @@ type storage struct {
 	addr ir.Ptr
 	// sym is the symbol, for a global or a function.
 	sym ir.Symbol
+	// imp is a declaration this unit has read and nothing has used yet.
+	// See unit.symOf.
+	imp *pendingImport
 	// class and ivar name the instance variable, for stIvar.
 	class string
 	ivar  string
 	// value is the constant, for an enumeration constant.
 	value int64
+}
+
+// pendingImport is an imported symbol that has not been created.
+//
+// An import is a demand on the linker and a declaration is not. One
+// `#import <Foundation/Foundation.h>` reads some nine thousand prototypes
+// and the program calls a handful; an object file carrying an undefined
+// symbol for each of the rest asks ld for frameworks the program never
+// mentioned, and the first thing that fails on is AEBuildAppleEvent, from
+// AppleEvents, which arrives through Foundation's include graph and which
+// nothing here ever wanted.
+//
+// Exactly one of sig and ftyp is set: a function has a signature, an object
+// has a type.
+type pendingImport struct {
+	sym  string // the linker name, prefix already applied
+	sig  *ir.Sig
+	ftyp ir.FType
 }
 
 type scope struct {
@@ -71,4 +92,23 @@ func (u *unit) lookup(name string) *storage {
 		}
 	}
 	return nil
+}
+
+// symOf is a declared name's symbol, creating the import the first time
+// something asks for one. A name that is only declared never reaches the
+// module, and so never reaches the object file's symbol table.
+func (u *unit) symOf(st *storage) ir.Symbol {
+	if st == nil {
+		return nil
+	}
+	if st.sym == nil && st.imp != nil {
+		switch {
+		case st.imp.sig != nil:
+			st.sym = u.mod.ImportFunc(st.imp.sym, st.imp.sig)
+		default:
+			st.sym = u.mod.ImportGlobal(st.imp.sym, st.imp.ftyp)
+		}
+		st.imp = nil
+	}
+	return st.sym
 }
