@@ -594,3 +594,28 @@ func TestSuperInstancetypeIsTheSubclass(t *testing.T) {
 		t.Errorf("[super init] is %v, want Node *", got)
 	}
 }
+
+// __builtin_va_list is the compiler's type, and its shape is the target's.
+func TestVaListShape(t *testing.T) {
+	m := types.LP64()
+	m.VaListSize = 24
+	f := token.NewFile("t.c", []byte("__builtin_va_list ap;\n"))
+	file, _ := parser.ParseFile(f, 0)
+	info, ds := analyzer.Check(f, file, m, 0)
+	for _, d := range ds {
+		if d.Severity == token.Error {
+			t.Fatalf("%s", d.Print(f))
+		}
+	}
+	var got types.Type
+	ast.Inspect(file, func(n ast.Node) bool {
+		if d, ok := n.(*ast.InitDeclarator); ok {
+			got = info.Types[d]
+		}
+		return true
+	})
+	a := types.AsArray(got)
+	if a == nil || a.Len != 3 {
+		t.Errorf("va_list is %v, want an array of three words", got)
+	}
+}

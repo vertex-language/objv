@@ -50,7 +50,7 @@ func (u *unit) message(e *ast.MessageExpr, t types.Type) ir.Value {
 				// §6.5.2.2's promotions are all the callee can expect --
 				// and where an aggregate has no declaration to hang byval
 				// on, so there is nothing to say about how it travels.
-				if isAggregate(at) {
+				if types.IsRecord(at) {
 					u.unsupported(v, "a struct or union in a variadic argument")
 					return nil
 				}

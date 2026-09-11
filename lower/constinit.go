@@ -24,7 +24,10 @@ import (
 func (u *unit) constInit(e ast.Expr, t types.Type) (ir.Init, bool) {
 	if list, ok := e.(*ast.InitList); ok {
 		c := &initCursor{items: list.Items}
-		return u.constFill(t, c)
+		// constDescend, not constFill: these are the object's own braces,
+		// already opened, so the items inside belong to its subobjects.
+		// See init.go's descend for what goes wrong otherwise.
+		return u.constDescend(t, c)
 	}
 	return u.constScalar(e, t)
 }
@@ -166,13 +169,24 @@ func (u *unit) constFill(t types.Type, c *initCursor) (ir.Init, bool) {
 		}
 	}
 
+	return u.constDescend(t, c)
+}
+
+// constDescend builds an object from the initializers that follow, without
+// asking whether the next one's braces are for the object itself.
+func (u *unit) constDescend(t types.Type, c *initCursor) (ir.Init, bool) {
 	switch {
 	case types.IsArray(t):
 		return u.constArray(types.AsArray(t), t, c)
 	case types.IsRecord(t):
 		return u.constRecord(types.AsRecord(t), c)
+	case c.done():
+		return ir.ZeroInit, true
 	}
-	return ir.Init{}, false
+	// A scalar in its own braces: `int x = { 5 }`.
+	it := c.items[c.i]
+	c.i++
+	return u.constOne(t, it.Value)
 }
 
 // constOne folds one initializer into one subobject.

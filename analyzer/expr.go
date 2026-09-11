@@ -478,6 +478,13 @@ func (c *checker) callType(e *ast.CallExpr) types.Type {
 	if fnT == nil {
 		return nil
 	}
+	// A builtin whose result depends on its arguments rather than on its
+	// name. There is one; see builtinResult.
+	if id, ok := stripParens(e.Fun).(*ast.Ident); ok {
+		if t, ok := builtinResult(c.name(id), args); ok {
+			return t
+		}
+	}
 	if b := types.AsBlock(fnT); b != nil {
 		return c.checkArgs(e, b.Sig, args, "block")
 	}

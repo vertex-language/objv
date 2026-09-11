@@ -46,6 +46,10 @@ const (
 	bExpect
 	bTrap
 	bConstantP
+	bVaStart
+	bVaEnd
+	bVaCopy
+	bVaArgRef
 )
 
 // builtinOps is the name-to-verb map, built the same way the analyzer builds
@@ -80,6 +84,10 @@ var builtinOps = func() map[string]builtinOp {
 	m["__builtin_unreachable"] = bTrap
 	m["__builtin_trap"] = bTrap
 	m["__builtin_constant_p"] = bConstantP
+	m["__builtin_va_start"] = bVaStart
+	m["__builtin_va_end"] = bVaEnd
+	m["__builtin_va_copy"] = bVaCopy
+	m["__builtin_va_arg_ref"] = bVaArgRef
 	return m
 }()
 
@@ -116,6 +124,9 @@ func (u *unit) builtinCall(name string, e *ast.CallExpr) (ir.Value, bool) {
 			return b.I32.Const(v), true
 		}
 		return b.I32.Const(0), true
+
+	case bVaStart, bVaEnd, bVaCopy, bVaArgRef:
+		return u.variadicBuiltin(op, e)
 
 	case bTrap:
 		// __builtin_unreachable and __builtin_trap become the same
@@ -364,4 +375,90 @@ func (u *unit) builtin3(op builtinOp, x, y, z ir.Value) ir.Value {
 		}
 	}
 	return nil
+}
+
+// §7.16's variadic machinery.
+//
+// objv's own <stdarg.h> writes the four macros in terms of these builtins,
+// taking the *address* of the list rather than the list itself:
+//
+//	#define va_start(ap, last) __builtin_va_start(&(ap))
+//	#define va_arg(ap, type)   (*(type *)__builtin_va_arg_ref(&(ap), (type *)0))
+//
+// which is what lets one signature serve whatever shape __builtin_va_list
+// has on the target — a pointer on Darwin's AArch64, four fields on SysV
+// x86-64. The second argument of va_arg_ref is a null pointer that exists
+// only to carry the type: C has no other way to hand a type to something
+// that is not a keyword, and VIR's va_arg_ref wants one.
+//
+// The `last` argument of va_start is dropped. It names the last fixed
+// parameter, which mattered to a compiler that computed the tail's address
+// from it; VIR's va_start knows where this function's own parameters ended.
+func (u *unit) variadicBuiltin(op builtinOp, e *ast.CallExpr) (ir.Value, bool) {
+	b := u.fn.cur
+	ap, ok := u.listArg(e, 0)
+	if !ok {
+		return nil, true
+	}
+	switch op {
+	case bVaStart:
+		b.VaStart(ap)
+		return nil, true
+	case bVaEnd:
+		b.VaEnd(ap)
+		return nil, true
+	case bVaCopy:
+		src, ok := u.listArg(e, 1)
+		if !ok {
+			return nil, true
+		}
+		b.VaCopy(ap, src)
+		return nil, true
+	}
+
+	// va_arg_ref: the type is the second argument's pointee, and the
+	// result is the argument's address in the list.
+	if len(e.Args) < 2 {
+		u.errorf(e, "internal: __builtin_va_arg_ref takes a list and a type")
+		return nil, true
+	}
+	pt := types.AsPointer(types.Unqualify(u.typeOf(e.Args[1])))
+	if pt == nil {
+		u.errorf(e, "internal: __builtin_va_arg_ref's second argument is not a pointer")
+		return nil, true
+	}
+	t, ok := u.vaArgType(pt.Elem)
+	if !ok {
+		u.unsupported(e, "va_arg of type "+pt.Elem.String())
+		return nil, true
+	}
+	return b.Ptr.VaArgRef(ap, t), true
+}
+
+// listArg evaluates one `&ap` argument.
+func (u *unit) listArg(e *ast.CallExpr, i int) (ir.Ptr, bool) {
+	if i >= len(e.Args) {
+		u.errorf(e, "internal: a variadic builtin was called with too few arguments")
+		return ir.Ptr{}, false
+	}
+	p, ok := u.rvalue(e.Args[i]).(ir.Ptr)
+	if !ok {
+		u.errorf(e.Args[i], "internal: a va_list argument is not an address")
+		return ir.Ptr{}, false
+	}
+	return p, true
+}
+
+// vaArgType names the type one variadic argument has, which VIR's va_arg_ref
+// wants named rather than described: the ABI knowledge it needs to advance
+// the list is the same knowledge byval demands, and it reads it off the type.
+func (u *unit) vaArgType(t types.Type) (*ir.Type, bool) {
+	if r, ok := types.Unqualify(t).(*types.Record); ok {
+		return u.recordType(r)
+	}
+	f, ok := u.ftype(t)
+	if !ok {
+		return nil, false
+	}
+	return u.namedFType("vaarg", f), true
 }

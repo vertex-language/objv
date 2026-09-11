@@ -250,7 +250,7 @@ func (c *checker) Typedef(id *ast.Ident) types.Type {
 	if s := c.lookup(name); s != nil && s.kind == symTypedef {
 		return s.typ
 	}
-	if t, ok := builtinTypeName(name); ok {
+	if t, ok := c.builtinTypeName(name); ok {
 		return t
 	}
 	c.report(id, "unknown type name '"+name+"'")
@@ -265,13 +265,27 @@ func (c *checker) Typedef(id *ast.Ident) types.Type {
 // would fail on the first header that reaches <stdarg.h>, which on Darwin is
 // approximately all of them.
 //
-// It is void * here, which is what objv's own <stdarg.h> makes va_list and
-// what the va_* builtins will operate on. A register-passing ABI wants a
-// structure instead; that change belongs here, once, when lower implements
-// the varargs operations.
-func builtinTypeName(name string) (types.Type, bool) {
+// Its shape is the target's: a pointer where every variadic argument takes
+// one stack slot, and an object of several words where the walk has two
+// regions to cross. types.Model.VaListSize says which, and the type is
+// opaque either way — a program declares one, passes it and copies it, and
+// only va_start and va_arg look inside.
+func (c *checker) builtinTypeName(name string) (types.Type, bool) {
 	switch name {
 	case "__builtin_va_list":
+		if n := c.model.VaListSize; n > c.model.SizePtr {
+			// An array, so that passing one decays to its address — which
+			// is what makes `void f(va_list ap)` work on an ABI whose list
+			// is four fields. clang says the same thing with
+			// `struct __va_list_tag[1]`. The element is a long rather than
+			// a char because the fields inside are pointers and the object
+			// has to be aligned for them.
+			return &types.Array{
+				Elem: types.Typ(types.Long),
+				Len:  n / c.model.SizeLong,
+				Form: types.FixedArray,
+			}, true
+		}
 		return &types.Pointer{Elem: types.Typ(types.Void)}, true
 
 	// clang predefines these two as typedefs of __int128 and unsigned

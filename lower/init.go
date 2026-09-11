@@ -26,7 +26,11 @@ func (u *unit) initLocal(addr ir.Ptr, t types.Type, init ast.Expr) {
 	if list, ok := init.(*ast.InitList); ok {
 		u.zeroObject(addr, t)
 		c := &initCursor{items: list.Items}
-		u.fill(addr, t, c, list)
+		// descend, not fill: these are the object's *own* braces, already
+		// opened. fill's first question is whether the next item's braces
+		// belong to the object in front of it, and here the answer is no —
+		// they belong to its first subobject.
+		u.descend(addr, t, c, list)
 		return
 	}
 	u.initScalarOrCopy(addr, t, init)
@@ -169,13 +173,29 @@ func (u *unit) fill(addr ir.Ptr, t types.Type, c *initCursor, at ast.Node) {
 		}
 	}
 
+	u.descend(addr, t, c, at)
+}
+
+// descend writes an object from the initializers that follow, without asking
+// whether the next one's braces are for the object itself.
+//
+// The distinction is §6.7.9p17's, and it is the whole of how nested braces
+// work. `int m[2][2] = { {1,2}, {3,4} }` opens the array's own braces; the
+// items inside them are for the *elements*, and treating the first as
+// another initializer for the array itself leaves every element after m[0][0]
+// at zero — which compiles, runs, and is wrong.
+func (u *unit) descend(addr ir.Ptr, t types.Type, c *initCursor, at ast.Node) {
 	switch {
 	case types.IsArray(t):
 		u.fillArray(addr, types.AsArray(t), c, at)
 	case types.IsRecord(t):
 		u.fillRecord(addr, types.AsRecord(t), c, at)
+	case c.done():
 	default:
-		u.unsupported(at, "an initializer for "+t.String())
+		// A scalar in its own braces: `int x = { 5 }`.
+		it := c.peek()
+		c.i++
+		u.fillOne(addr, t, it.Value)
 	}
 }
 

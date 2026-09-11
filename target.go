@@ -133,6 +133,27 @@ func (t Target) Supports() error {
 func darwinARM64() types.Model {
 	m := types.LP64()
 	m.SizeLongDouble, m.AlignLongDouble = 8, 8
+	// Darwin gives every variadic argument one stack slot, so the list is a
+	// pointer at the next one. The base standard's AArch64 does not, and
+	// its list is four fields and two saved regions.
+	m.VaListSize = 8
+	return m
+}
+
+// sysvLP64 is LP64 with SysV's va_list: four fields, because the arguments
+// are in two places — a register save area the callee's prologue writes, and
+// the caller's outgoing area.
+func sysvLP64() types.Model {
+	m := types.LP64()
+	m.VaListSize = 24
+	return m
+}
+
+// aapcsLP64 is LP64 with the base standard's AArch64 va_list, which is
+// five words: two saved regions, two offsets into them, and the stack.
+func aapcsLP64() types.Model {
+	m := types.LP64()
+	m.VaListSize = 32
 	return m
 }
 
@@ -149,19 +170,19 @@ var targets = map[string]Target{
 		prefix: "_",
 	},
 	"x86_64-macos": {
-		model: types.LP64(), ldbl: ldblX87, wint: "int",
+		model: sysvLP64(), ldbl: ldblX87, wint: "int",
 		abi: objcrt.Darwin64(), rtArch: objcrt.AMD64, platform: objcrt.PlatformMacOS,
 		arch: ArchAMD64, format: FormatMachO, irt: ir.X86_64MacOS,
 		prefix: "_",
 	},
 	"aarch64-linux": {
-		model: types.LP64(), ldbl: ldblQuad, wint: "unsigned int",
+		model: aapcsLP64(), ldbl: ldblQuad, wint: "unsigned int",
 		abi:    objcrt.ABI{Kind: objcrt.GNUstep, Container: objcrt.ELF, PtrBytes: 8},
 		rtArch: objcrt.ARM64,
 		arch:   ArchARM64, format: FormatELF, irt: ir.AArch64Linux,
 	},
 	"x86_64-linux": {
-		model: types.LP64(), ldbl: ldblX87, wint: "unsigned int",
+		model: sysvLP64(), ldbl: ldblX87, wint: "unsigned int",
 		abi:    objcrt.ABI{Kind: objcrt.GNUstep, Container: objcrt.ELF, PtrBytes: 8},
 		rtArch: objcrt.AMD64,
 		arch:   ArchAMD64, format: FormatELF, irt: ir.X86_64Linux,
@@ -183,6 +204,9 @@ func llp64() types.Model {
 	m.WCharKind = types.UShort
 	m.SizeLongDouble, m.AlignLongDouble = 8, 8
 	m.MSBitfields = true
+	// The Microsoft ABI gives every argument one slot, variadic or not, so
+	// the list is a pointer like Darwin's.
+	m.VaListSize = 8
 	return m
 }
 

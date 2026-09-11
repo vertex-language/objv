@@ -388,3 +388,13 @@ func TestFieldOffsets(t *testing.T) {
 		t.Errorf("union offsets = %v, want [0 0]", offs)
 	}
 }
+
+// §7.16's list is a target fact and not a language one, and the two answers
+// are not variations on each other: a pointer where every variadic argument
+// takes one stack slot, and four fields where the walk has two regions to
+// cross.
+func TestVaListSizeIsTheTargets(t *testing.T) {
+	if got := LP64().VaListSize; got != 0 {
+		t.Errorf("the bare model states a size (%d); the target is what states one", got)
+	}
+}

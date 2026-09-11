@@ -34,6 +34,18 @@ type Model struct {
 	// everything else on the platform, so it belongs to the target and not
 	// to the compiler. Windows sets it; nothing else does.
 	MSBitfields bool
+
+	// VaListSize is how many bytes an object of type __builtin_va_list
+	// occupies, and zero means one pointer.
+	//
+	// It is a target fact and not a language one, and the two answers are
+	// not variations on each other. Darwin's AArch64 gives every variadic
+	// argument one stack slot, so the list is a pointer at the next one;
+	// SysV x86-64 puts them in a register save area and the caller's
+	// outgoing area both, so the list is four fields saying where the walk
+	// has got to. The type is opaque either way — a program declares one,
+	// passes it and copies it, and only va_start and va_arg look inside.
+	VaListSize int64
 }
 
 // LP64 is the model of every target objv emits for: arm64 and x86-64 on

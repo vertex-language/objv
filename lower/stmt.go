@@ -54,8 +54,7 @@ func (u *unit) stmt(s ast.Stmt) {
 		u.switchStmt(s)
 
 	case *ast.CaseStmt:
-		// Reached only outside a switch, which the analyzer reported.
-		u.stmt(s.Stmt)
+		u.caseLabel(s)
 
 	case *ast.BreakStmt:
 		if !u.at() {
@@ -408,27 +407,55 @@ func (u *unit) switchStmt(s *ast.SwitchStmt) {
 	}
 	cur.Br(dflt.To())
 
-	// The body is walked once, in order: a case label opens its block and
-	// the statements between two labels fall through to the next.
+	// The body is walked once, in order, and a case label opens its block
+	// wherever it stands — which is not always at the top of the body.
+	// §6.8.1 puts a label on a statement, and the statement may be nested:
+	// `case 'a': case 'e': return 1;` is three labels on one statement, and
+	// a label inside an if or a loop is Duff's device. Every one of them is
+	// a target the branch chain above may jump to, so the blocks are looked
+	// up by label rather than walked for.
 	u.fn.breaks = append(u.fn.breaks, done)
+	u.fn.cases = append(u.fn.cases, blocks)
 	u.fn.cur = nil
 	for _, item := range body.Items {
-		if c, ok := item.(*ast.CaseStmt); ok {
-			blk := blocks[c]
-			if u.at() {
-				u.fn.cur.Br(blk.To())
-			}
-			u.fn.cur = blk
-			u.stmt(c.Stmt)
-			continue
-		}
 		u.stmt(item)
 	}
+	u.fn.cases = u.fn.cases[:len(u.fn.cases)-1]
 	u.fn.breaks = u.fn.breaks[:len(u.fn.breaks)-1]
 	if u.at() {
 		u.fn.cur.Br(done.To())
 	}
 	u.fn.cur = done
+}
+
+// caseLabel opens the block a case label names and lowers what it labels.
+//
+// The block was created before the body was walked, because the branch chain
+// that selects between them had to name it. Reaching the label in the body is
+// what *fills* it: control arrives here either by falling out of the previous
+// case or by the branch, and either way the statements go in this block.
+func (u *unit) caseLabel(c *ast.CaseStmt) {
+	blk, ok := u.currentCase(c)
+	if !ok {
+		// A label outside any switch, which the analyzer reported.
+		u.stmt(c.Stmt)
+		return
+	}
+	if u.at() {
+		u.fn.cur.Br(blk.To())
+	}
+	u.fn.cur = blk
+	u.stmt(c.Stmt)
+}
+
+// currentCase is the block the innermost open switch gave this label.
+func (u *unit) currentCase(c *ast.CaseStmt) (*ir.Block, bool) {
+	for i := len(u.fn.cases) - 1; i >= 0; i-- {
+		if blk, ok := u.fn.cases[i][c]; ok {
+			return blk, true
+		}
+	}
+	return nil, false
 }
 
 // collectCases finds every case and default label in a switch body, in

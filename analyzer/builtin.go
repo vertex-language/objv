@@ -105,6 +105,21 @@ var builtins = func() map[string]builtinSpec {
 	m["__builtin_bswap32"] = builtinSpec{ret: types.UInt, params: []types.Kind{types.UInt}}
 	m["__builtin_bswap64"] = builtinSpec{ret: types.ULongLong, params: []types.Kind{types.ULongLong}}
 
+	// The variadic machinery, §7.16. objv's own <stdarg.h> spells the four
+	// macros in terms of these, taking the address of the list rather than
+	// the list itself, so that one signature serves whatever shape
+	// __builtin_va_list has on the target.
+	//
+	// __builtin_va_arg_ref is the odd one: it advances the list past one
+	// argument and yields that argument's *address*, and its type is the
+	// type of the pointer it was handed — `(T *)0`, which is how the macro
+	// smuggles a type into an expression. See builtinResult.
+	m["__builtin_va_start"] = builtinSpec{ret: types.Void, params: []types.Kind{types.PointerKind}}
+	m["__builtin_va_end"] = builtinSpec{ret: types.Void, params: []types.Kind{types.PointerKind}}
+	m["__builtin_va_copy"] = builtinSpec{ret: types.Void,
+		params: []types.Kind{types.PointerKind, types.PointerKind}}
+	m["__builtin_va_arg_ref"] = builtinSpec{ret: types.Void, any: true}
+
 	// Control, not arithmetic.
 	m["__builtin_expect"] = builtinSpec{ret: types.Long, params: []types.Kind{types.Long, types.Long}}
 	m["__builtin_unreachable"] = builtinSpec{ret: types.Void}
@@ -145,7 +160,34 @@ func builtinType(name string) types.Type {
 		return ft
 	}
 	for _, k := range spec.params {
-		ft.Params = append(ft.Params, types.Param{Type: types.Typ(k)})
+		ft.Params = append(ft.Params, types.Param{Type: paramType(k)})
 	}
 	return ft
+}
+
+// paramType is a spec's kind as a type. Every kind but one is a basic type;
+// PointerKind stands for `void *`, which is what the variadic builtins take
+// and the only non-basic parameter in the table.
+func paramType(k types.Kind) types.Type {
+	if k == types.PointerKind {
+		return &types.Pointer{Elem: types.Typ(types.Void)}
+	}
+	return types.Typ(k)
+}
+
+// builtinResult is the type of a call to a builtin whose result depends on
+// its arguments rather than on its name.
+//
+// There is one, and it is __builtin_va_arg_ref: `va_arg(ap, T)` expands to
+// `*(T *)__builtin_va_arg_ref(&ap, (T *)0)`, and the null pointer is there
+// only to carry T into an expression — C has no other way to pass a type to
+// something that is not a keyword. So the call's type is that pointer's.
+func builtinResult(name string, args []types.Type) (types.Type, bool) {
+	if name != "__builtin_va_arg_ref" || len(args) != 2 || args[1] == nil {
+		return nil, false
+	}
+	if !types.IsPointer(args[1]) {
+		return nil, false
+	}
+	return args[1], true
 }

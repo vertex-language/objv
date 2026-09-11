@@ -42,3 +42,20 @@ int locals(void) {
 struct { int x, y; } point = { 3, 4 };
 // vir: internal type @anon_
 // vir: export global rw @_point @anon_
+
+// Nested braces. §6.7.9p17: the object is descended into, brace by brace,
+// and the items inside an object's own braces belong to its *subobjects* —
+// not to the object again. Reading the first item's braces as another
+// initializer for the whole array leaves everything after the first scalar
+// at zero, which compiles and runs and is wrong.
+int grid[2][2] = { { 1, 2 }, { 3, 4 } };
+// vir: export global rw @_grid [2][2]i32
+// vir: = { { 1, 2 }, { 3, 4 } }
+
+struct Inner pairs[2] = { { 1, 2 }, { 3, 4 } };
+// vir: export global rw @_pairs [2]@struct_Inner
+
+int nested(void) {
+    struct Inner local[2] = { { 5, 6 }, { 7, 8 } };
+    return local[1].c;
+}

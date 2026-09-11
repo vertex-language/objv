@@ -23,6 +23,11 @@ type fnState struct {
 	breaks    []*ir.Block
 	continues []*ir.Block
 
+	// cases is the block each open switch gave each of its labels. A label
+	// is not always at the top of the body, so it is found by lookup where
+	// it stands rather than by walking for it.
+	cases []map[ast.Stmt]*ir.Block
+
 	// self is the receiver, inside a method. Every instance variable
 	// access and every implicit send starts here.
 	self  ir.Ptr
@@ -497,6 +502,12 @@ func (u *unit) buildBody(fn *ir.Func, ft *types.Func, names []*ast.Ident,
 			return
 		}
 		values = append(values, addParam(fn, r, paramName(i, p)))
+	}
+	if ft.Variadic {
+		// The var-tail is part of the signature and not only of the call:
+		// va_start needs to know this function has one, and a call to it
+		// needs to know which arguments the declaration named.
+		fn.Variadic()
 	}
 	if !types.IsVoid(ft.Ret) && !isIndirectResult(ft.Ret) {
 		r, ok := u.reg(ft.Ret)

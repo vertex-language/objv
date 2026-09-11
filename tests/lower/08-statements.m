@@ -36,3 +36,30 @@ void raise(id e) { @throw e; }
 // objc_exception_throw does not return, and the block has to end somewhere.
 // vir: @_objc_exception_throw
 // vir: trap
+
+// §6.8.1 puts a label on a statement, and the statement may be another
+// label: `case 1: case 2: return x;` is two labels on one return. Each is a
+// target the switch's branch chain names, so each opens a block, and the
+// blocks fall through to the one holding the statement.
+int stacked(int c) {
+    switch (c) {
+    case 1: case 2: case 3: return 1;
+    case 4: return 2;
+    }
+    return 0;
+}
+// vir: @switch_case
+
+// A label inside a loop inside the switch is Duff's device, and it is the
+// reason the blocks are found by lookup where the label stands rather than
+// walked for at the top of the body.
+void duff(char *to, const char *from, int count) {
+    int n = (count + 7) / 8;
+    switch (count % 8) {
+    case 0: do { *to++ = *from++;
+    case 7:      *to++ = *from++;
+    case 6:      *to++ = *from++;
+            } while (--n > 0);
+    }
+}
+// vir: @do_body

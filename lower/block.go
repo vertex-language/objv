@@ -591,7 +591,7 @@ func (u *unit) callBlock(e *ast.CallExpr, bt *types.Block) ir.Value {
 				v = copied
 			}
 		} else {
-			if isAggregate(at) {
+			if types.IsRecord(at) {
 				u.unsupported(a, "a struct or union in a variadic argument")
 				return nil
 			}

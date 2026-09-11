@@ -283,3 +283,29 @@ func mergeRanges(in [][2]int64) [][2]int64 {
 	}
 	return out
 }
+
+// namedFType interns a plain storage type under a name, which the operations
+// that want a *named* type — va_arg_ref, byval — can be handed.
+//
+// The name is the shape, so two uses of the same type are one declaration.
+func (u *unit) namedFType(prefix string, f ir.FType) *ir.Type {
+	name := prefix + "_" + ftypeKey(f)
+	if t := u.mod.LookupType(name); t != nil {
+		return t
+	}
+	return u.mod.TypeOf(name, f).Internal()
+}
+
+// ftypeKey is a storage type as an identifier: its printed form with the
+// characters a VIR name cannot hold replaced.
+func ftypeKey(f ir.FType) string {
+	b := []byte(f.String())
+	for i, c := range b {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '_':
+		default:
+			b[i] = '_'
+		}
+	}
+	return string(b)
+}

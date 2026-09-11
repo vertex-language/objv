@@ -1065,11 +1065,12 @@ func (u *unit) call(e *ast.CallExpr, t types.Type) ir.Value {
 				v = copied
 			}
 		} else {
-			if isAggregate(at) {
+			if types.IsRecord(at) {
 				// A struct in the var-tail. It is legal C, and what the
 				// convention does with it is a classification this has no
 				// way to state: there is no declared parameter to hang
-				// byval on.
+				// byval on. An *array* is not one of these — §6.3.2.1
+				// decayed it to a pointer before it got here.
 				u.unsupported(a, "a struct or union in a variadic argument")
 				return nil
 			}
