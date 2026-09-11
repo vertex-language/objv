@@ -132,7 +132,7 @@ func (u *unit) at() bool { return u.fn != nil && u.fn.cur != nil }
 // import: the two are one symbol, and a call written before the definition
 // has to reach the same one the definition fills in.
 func (u *unit) declareFile() {
-	for _, d := range u.file.Decls {
+	for _, d := range u.fileScope() {
 		fd, ok := d.(*ast.FuncDecl)
 		if !ok || fd.Body == nil || fd.Name == nil {
 			continue
@@ -157,7 +157,7 @@ func (u *unit) declareFile() {
 	// §6.9.2's tentative definition counts: `int counter;` at file scope
 	// with no initializer defines the object too, and a unit with both that
 	// and an extern declaration still defines one.
-	for _, d := range u.file.Decls {
+	for _, d := range u.fileScope() {
 		g, ok := d.(*ast.GenDecl)
 		if !ok {
 			continue
@@ -179,18 +179,59 @@ func (u *unit) declareFile() {
 		}
 	}
 	for _, d := range u.file.Decls {
-		switch d := d.(type) {
-		case *ast.GenDecl:
-			u.declareGen(d)
-		case *ast.FuncDecl:
-			u.declareFunc(d)
-		case *ast.ClassImplDecl:
-			if k := u.classNamed(u.name(d.Name)); k != nil {
+		if impl, ok := d.(*ast.ClassImplDecl); ok {
+			if k := u.classNamed(u.name(impl.Name)); k != nil {
 				u.declareClass(k)
 				u.declareIvars(k)
 			}
 		}
 	}
+	for _, d := range u.fileScope() {
+		switch d := d.(type) {
+		case *ast.GenDecl:
+			u.declareGen(d)
+		case *ast.FuncDecl:
+			u.declareFunc(d)
+		}
+	}
+}
+
+// fileScope is every declaration at file scope, including the ones written
+// inside an @implementation.
+//
+// A C declaration between two methods is not a member of the class: §4.4
+// puts it at file scope like any other, and a `static` there is the ordinary
+// way to give a class one variable rather than one per instance —
+//
+//	@implementation Calculator
+//	static NSUInteger gCalls = 0;
+//	+ (void)initialize { gCalls++; }
+//	@end
+//
+// — which is how +initialize is written wherever it is written at all. The
+// definitions were already emitted from inside the walk over members; what
+// was missing was the declaration, so a method body referring to one reached
+// lowering with nothing to refer to.
+func (u *unit) fileScope() []ast.Decl {
+	out := make([]ast.Decl, 0, len(u.file.Decls))
+	add := func(members []ast.Decl) {
+		for _, m := range members {
+			switch m.(type) {
+			case *ast.GenDecl, *ast.FuncDecl:
+				out = append(out, m)
+			}
+		}
+	}
+	for _, d := range u.file.Decls {
+		out = append(out, d)
+		switch d := d.(type) {
+		case *ast.ClassImplDecl:
+			add(d.Members)
+		case *ast.CategoryImplDecl:
+			add(d.Members)
+		}
+	}
+	return out
 }
 
 func (u *unit) declareGen(d *ast.GenDecl) {

@@ -82,3 +82,24 @@ static const double promoted = 2;
 double both(void) { return negative + promoted; }
 // vir: -1.5
 // vir: 2
+
+// A union at file scope is initialized through the member the designator
+// names, which a positional list could only ever say the first of.
+union Slot { long i; double d; const char *s; };
+union Slot slotI = {.i = 7};
+union Slot slotD = {.d = 2.5};
+union Slot slotS = {.s = "text"};
+// vir: { d = 2.5 }
+// vir: { s = @
+
+// A static written between two methods is at file scope like any other, and
+// is how +initialize is written wherever it is written at all.
+@interface Tally : NSObject
++ (int)count;
+@end
+@implementation Tally
+static int gTally = 0;
++ (void)initialize { gTally++; }
++ (int)count { return gTally; }
+@end
+// vir: @_gTally

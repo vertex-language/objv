@@ -319,10 +319,12 @@ func (u *unit) constRecord(r *types.Record, c *initCursor) (ir.Init, bool) {
 		}
 		items[lay.slot[i]] = v
 		if r.Union {
-			// A union's value is its first member's, and VIR writes only
-			// that one: the rest of the object is what the member does not
-			// reach.
-			return ir.List(items[:1]...), true
+			// One member of a union is initialized and the rest of the
+			// object is whatever that member does not reach. Which member
+			// is the point: `{.d = 2.5}` names the second, and a positional
+			// list could only ever say the first. §19.10 takes a named-field
+			// initializer for exactly this.
+			return ir.Fields(ir.Val(st.Fields()[lay.slot[i]].Name, v)), true
 		}
 		i++
 	}
