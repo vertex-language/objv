@@ -98,14 +98,23 @@ func (u *unit) releaseTemps() {
 
 // ---- the runtime's four calls ----
 
-func (u *unit) retain(v ir.Value) ir.Value {
+// retain takes a reference. t is the static type of v, which decides which
+// of the runtime's two retains it is: a block literal lives in the frame that
+// wrote it, so retaining one has to copy it to the heap first, and
+// objc_retainBlock is the call that does. A nil t means "not a block", for
+// the callers that have no type to hand.
+func (u *unit) retain(v ir.Value, t types.Type) ir.Value {
 	p, ok := v.(ir.Ptr)
 	if !ok || !u.arcOn() {
 		return v
 	}
+	name := runtime.Retain
+	if t != nil && types.IsBlock(t) {
+		name = runtime.RetainBlock
+	}
 	sig := ir.NewSig()
 	sig.Param(ir.TypePtr).Ret(ir.TypePtr)
-	res := u.fn.cur.Call(u.extern(runtime.Retain, sig), p)
+	res := u.fn.cur.Call(u.extern(name, sig), p)
 	if res.Len() == 0 {
 		return v
 	}
@@ -158,7 +167,7 @@ func (u *unit) initStrong(addr ir.Ptr, t types.Type, init ast.Expr) {
 	}
 	v = u.convert(v, u.typeOf(init), t)
 	if !owned {
-		v = u.retain(v)
+		v = u.retain(v, t)
 	}
 	u.storeTo(addr, v, t)
 }
@@ -171,12 +180,20 @@ func (u *unit) initStrong(addr ir.Ptr, t types.Type, init ast.Expr) {
 // first can free what is about to be stored.
 func (u *unit) storeStrong(addr ir.Ptr, t types.Type, v ir.Value, owned bool) ir.Value {
 	if !owned {
-		v = u.retain(v)
+		v = u.retain(v, t)
 	}
+	u.replaceStrong(addr, t, v)
+	return v
+}
+
+// replaceStrong is storeStrong's second half, for the caller that has to do
+// something between the retain and the store: a __block variable's address
+// is only valid after the retain, since retaining a block moves the
+// structure it captured. See refreshByref.
+func (u *unit) replaceStrong(addr ir.Ptr, t types.Type, v ir.Value) {
 	old := u.loadFrom(addr, t)
 	u.storeTo(addr, v, t)
 	u.release(old)
-	return v
 }
 
 // releaseStrongLocal is what a __strong variable's scope ending does.
@@ -199,7 +216,7 @@ func (u *unit) returnObject(v ir.Value, owned bool) ir.Value {
 	}
 	if u.fn.retainedReturn {
 		if !owned {
-			v = u.retain(v)
+			v = u.retain(v, u.fn.ret)
 		}
 		return v
 	}
@@ -208,7 +225,7 @@ func (u *unit) returnObject(v ir.Value, owned bool) ir.Value {
 	}
 	// A borrowed value: whatever holds it may be released before the caller
 	// looks, and the frame's own cleanups run between here and there.
-	return u.autoreleaseReturn(u.retain(v))
+	return u.autoreleaseReturn(u.retain(v, u.fn.ret))
 }
 
 // strongLocal is a variable whose scope ending lets go of what it holds, and

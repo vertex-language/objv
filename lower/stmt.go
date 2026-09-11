@@ -197,7 +197,7 @@ func (u *unit) localDecl(d ast.Decl) {
 			if b == nil || it.Init == nil {
 				continue
 			}
-			u.initLocal(u.byrefAddr(b, b.slot), t, it.Init)
+			u.initByref(b, t, it.Init)
 			continue
 		}
 		slot := u.slot(t, name)

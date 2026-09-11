@@ -48,7 +48,10 @@ func TestPrograms(t *testing.T) {
 	}
 	for _, path := range files {
 		t.Run(filepath.Base(path), func(t *testing.T) {
-			t.Parallel()
+			// Not parallel. Each file is four builds against the SDK --
+			// two by objv and two by clang -- and running the corpus at
+			// once is a few dozen concurrent links, which is a load the
+			// machine notices and a speedup nobody needed.
 			src, err := os.ReadFile(path)
 			if err != nil {
 				t.Fatal(err)

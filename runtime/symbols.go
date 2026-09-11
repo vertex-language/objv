@@ -249,6 +249,14 @@ const (
 	//	id objc_getProperty(id self, SEL _cmd, ptrdiff_t offset, BOOL atomic);
 	GetProperty = "objc_getProperty"
 
+	// RetainBlock is what retaining a *block* is, and the difference is not
+	// a detail: a block literal is a stack object, and retaining it has to
+	// copy it to the heap first or the reference outlives the frame. Every
+	// other object is retained with Retain.
+	//
+	//	id objc_retainBlock(id);
+	RetainBlock = "objc_retainBlock"
+
 	// Exceptions (§7.2) and synchronization (§7.3).
 	ExceptionThrow   = "objc_exception_throw"
 	ExceptionRethrow = "objc_exception_rethrow"

@@ -158,11 +158,14 @@ var BlockByrefWithHelpers = []Field{
 }
 
 // The flags word of a byref. The high nibble is a layout describing what the
-// variable is, and objv writes the two it can mean: nothing at all for a
-// variable the runtime need not touch, and unretained for an object under
-// manual reference counting, which is what clang writes there too.
+// variable is, and which one an object gets is the memory model's answer
+// rather than the type's: a __block object is not retained under manual
+// reference counting and is under ARC, which is the whole difference between
+// the two spellings clang writes.
 const (
 	BlockByrefHasCopyDispose   BlockFlag = 1 << 25
+	BlockByrefLayoutStrong     BlockFlag = 3 << 28
+	BlockByrefLayoutWeak       BlockFlag = 4 << 28
 	BlockByrefLayoutUnretained BlockFlag = 5 << 28
 )
 

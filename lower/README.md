@@ -165,10 +165,24 @@ of every weak reference to an object and walks it during dealloc, which is
 what makes the reference go to nil. `loadFrom` and `storeTo` are the choke
 points — a weak reference is never read by loading it.
 
+Retaining a *block* is `objc_retainBlock` and not `objc_retain`, which is not
+a name: a block literal lives in the frame that wrote it, and the call is what
+copies it to the heap first. Everything that escapes — a block returned, a
+block stored in a `__strong` variable or a `copy` property — goes through it.
+
+`__block` is where the two mechanisms meet, and where the order matters. The
+structure a `__block` variable lives in is reached through its `forwarding`
+field, and that field's value *changes* under an assignment whose right-hand
+side copies a block: `fact = ^{ … fact … }` retains the block, retaining a
+block copies it to the heap, and a block that captured this variable takes
+the structure with it. So the address is taken after the retain and not
+before it — see `refreshByref` and `initByref` — and the payload is nil
+before anything reads it, since a store into a `__strong` location releases
+what it replaced and there would otherwise be a stack pattern there.
+
 What is not here: the optimizations clang applies to pairs it can prove
-redundant, which cost instructions and not correctness; `objc_retainBlock` on
-a block assigned to a `__strong` variable; and the release of a `__strong`
-local left by a `goto` out of its scope, which leaks.
+redundant, which cost instructions and not correctness; and the release of a
+`__strong` local left by a `goto` out of its scope, which leaks.
 
 ## Where the allocations go
 
@@ -440,7 +454,7 @@ what they owe out of a frame slot rather than out of the value they were given
 — a pad is reached only by an unwind edge, so the block the lock was taken in
 does not dominate it.
 
-One thing ARC does not yet do here: a `__strong` local is not released on the
+One thing ARC does not yet do in a @try: a `__strong` local is not released on the
 path that unwinds past its scope. The releases are emitted on the paths out
 that lowering can see, and an unwind edge is not one of them — so an exception
 crossing a scope leaks what that scope held.

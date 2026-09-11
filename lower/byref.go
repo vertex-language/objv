@@ -93,18 +93,49 @@ func (u *unit) declareByref(name string, t types.Type, it *ast.InitDeclarator) *
 
 	flags := runtime.BlockFlag(0)
 	if helpers {
-		flags = runtime.BlockByrefHasCopyDispose | runtime.BlockByrefLayoutUnretained
+		flags = runtime.BlockByrefHasCopyDispose | u.byrefLayoutFlag(t)
 	}
 	cur.I32.Store(cur.I32.Const(int64(int32(flags))), at("flags"))
 	cur.I32.Store(cur.I32.Const(size), at("size"))
 	if helpers {
 		cur.Ptr.Store(cur.Ptr.GetAddr(u.byrefCopyHelper(off)), at("byref_keep"))
 		cur.Ptr.Store(cur.Ptr.GetAddr(u.byrefDisposeHelper(off)), at("byref_destroy"))
+
+		// And the variable itself is nil, before anything reads it.
+		//
+		// §5.6 says a __strong location starts empty, and a store into one
+		// releases what it replaced — so a structure whose payload was
+		// never written holds a stack pattern that the first assignment
+		// hands to objc_release. An ordinary __strong local gets the same
+		// store where it is declared; this one is in a structure and was
+		// being missed.
+		payload := b.slot
+		if off != 0 {
+			payload = cur.Ptr.Add(b.slot, cur.I64.Const(off))
+		}
+		cur.Ptr.Store(cur.Ptr.Const(), payload)
 	}
 
 	u.bind(name, &storage{kind: stByref, typ: t, addr: b.slot, byref: b})
 	u.fn.byrefs = append(u.fn.byrefs, b.slot)
 	return b
+}
+
+// byrefLayoutFlag is the high nibble of a byref's flags: what the runtime
+// should understand the variable to be.
+//
+// Unretained under manual reference counting, which is the historical answer
+// and the reason `__block id` was how a block broke a retain cycle before
+// there was __weak. Strong under ARC, where a __block object is owned by the
+// structure like any other __strong location.
+func (u *unit) byrefLayoutFlag(t types.Type) runtime.BlockFlag {
+	switch {
+	case u.isWeak(t):
+		return runtime.BlockByrefLayoutWeak
+	case u.isStrong(t):
+		return runtime.BlockByrefLayoutStrong
+	}
+	return runtime.BlockByrefLayoutUnretained
 }
 
 // byrefAddr is where a __block variable actually is: through forwarding,
@@ -201,4 +232,55 @@ func (u *unit) byrefDisposeHelper(off int64) ir.Symbol {
 	b.Return()
 	u.byrefHelpers[name] = fn
 	return fn
+}
+
+// refreshByref re-reads the address of a __block variable named by an
+// identifier, and is the answer to the one thing the forwarding indirection
+// is easy to get wrong.
+//
+// Every access goes through the structure's forwarding field, and the value
+// of that field changes under an assignment whose right-hand side copies a
+// block: `fact = ^{ … fact … }` retains the block, retaining a block copies
+// it to the heap, and a block that captured this variable takes the
+// structure with it. An address read before that names the stack copy, which
+// from then on is the one nobody reads.
+//
+// Only an identifier, because only an identifier can be re-resolved for
+// free: `a[i++]` would evaluate its subscript twice.
+func (u *unit) refreshByref(e ast.Expr, addr ir.Ptr) ir.Ptr {
+	id, ok := stripParens(e).(*ast.Ident)
+	if !ok {
+		return addr
+	}
+	st := u.lookup(u.name(id))
+	if st == nil || st.kind != stByref || st.byref == nil {
+		return addr
+	}
+	return u.byrefAddr(st.byref, st.addr)
+}
+
+// initByref writes a __block variable's initializer.
+//
+// The structure's address is taken after the value and not before it, for
+// refreshByref's reason: `__block Handler h = ^{ … h … };` retains the block,
+// retaining a block copies it to the heap, and the block captured this very
+// structure — so an address read first names the copy nobody will read again.
+//
+// Only for something held in a register. An aggregate initializer writes
+// through the address as it goes, so there is no "after" to take it at, and
+// an aggregate is not something a retain can move.
+func (u *unit) initByref(b *byref, t types.Type, init ast.Expr) {
+	if isAggregate(t) || !objectValued(t) || (u.arcOn() && u.isWeak(t)) {
+		u.initLocal(u.byrefAddr(b, b.slot), t, init)
+		return
+	}
+	v, owned := u.rvalueOwned(init)
+	if v == nil {
+		return
+	}
+	v = u.convert(v, u.typeOf(init), t)
+	if u.arcOn() && u.isStrong(t) && !owned {
+		v = u.retain(v, t)
+	}
+	u.storeTo(u.byrefAddr(b, b.slot), v, t)
 }

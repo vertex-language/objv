@@ -1012,17 +1012,24 @@ func (u *unit) assign(e *ast.AssignExpr, t types.Type) ir.Value {
 			}
 			v = u.convert(v, u.typeOf(e.Rhs), at)
 			if !u.isStrong(at) {
-				u.storeTo(*addr, v, at) // self, consumed
+				u.storeTo(u.refreshByref(e.Lhs, *addr), v, at) // self, consumed
 				return v
 			}
-			return u.storeStrong(*addr, at, v, owned)
+			if !owned {
+				v = u.retain(v, at)
+			}
+			// The address after the retain and not before it: retaining a
+			// block copies it to the heap, and a block that captured a
+			// __block variable takes that variable's structure with it.
+			u.replaceStrong(u.refreshByref(e.Lhs, *addr), at, v)
+			return v
 		}
 		v := u.rvalue(e.Rhs)
 		if v == nil {
 			return nil
 		}
 		v = u.convert(v, u.typeOf(e.Rhs), at)
-		u.storeTo(*addr, v, at)
+		u.storeTo(u.refreshByref(e.Lhs, *addr), v, at)
 		return v
 	}
 
