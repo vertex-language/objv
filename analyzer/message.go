@@ -2,6 +2,7 @@ package analyzer
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/vertex-language/objv/ast"
 	"github.com/vertex-language/objv/types"
@@ -120,26 +121,113 @@ func (c *checker) selectorOf(e *ast.MessageExpr) (string, []types.Type) {
 func (c *checker) resolveSend(e *ast.MessageExpr, recv types.Type, sel string, super bool) *types.Method {
 	o := types.AsObject(recv)
 	if o == nil {
-		if types.AsTypeParam(recv) != nil {
-			// §5.5's type parameter, erased. `[[array firstObject] foo]` on
-			// an unspecialized NSArray sends to ObjectType, which is `id`
-			// by the time there is a value: the runtime resolves it, and so
-			// does this — which is to say, it does not.
-			return nil
-		}
-		if types.IsBlock(recv) {
-			// A block is an object: its first word is an isa, which is why
-			// `[^{ … } copy]` is how a block is moved to the heap without
-			// ARC, and why a block can be put in an NSArray. Which class it
-			// is belongs to libSystem and is not in any header, so the send
-			// is the one to an id — resolved by the runtime, unresolvable
-			// here, and typed id.
-			return nil
+		// §5.5's type parameter, erased, and a block — whose first word is
+		// an isa, which is why `[^{ … } copy]` moves one to the heap and
+		// why a block can go in an NSArray. Neither names a class to look
+		// in, so both are sends to id.
+		if types.AsTypeParam(recv) != nil || types.IsBlock(recv) {
+			return c.poolMethod(sel, false)
 		}
 		c.report(e, "receiver is "+recv.String()+", which is not an object pointer")
 		return nil
 	}
-	return c.lookupMethod(recv, sel, o.Meta)
+	if m := c.lookupMethod(recv, sel, o.Meta); m != nil {
+		return m
+	}
+	if o.Base == nil && len(o.Protocols) == 0 {
+		return c.poolMethod(sel, o.Meta)
+	}
+	return nil
+}
+
+// poolMethod is where a send to bare `id` gets its signature.
+//
+// The runtime resolves such a send, but the *caller* still has to place the
+// arguments and read the result, and objc_msgSend forwards whatever it was
+// handed — so the shape of the call is decided here or it is decided wrong.
+// `[counts[key] intValue]` is the everyday case: a subscript on an
+// unspecialized NSDictionary yields id, and reading the result as an object
+// pointer rather than as an int is a wrong register, not a wrong warning.
+//
+// So the whole unit is the search space, which is what clang does with its
+// global method pool. With one restriction clang leaves to a warning: where
+// two declarations of the selector disagree about the signature, neither is
+// chosen, because choosing would be choosing which of two ABIs to call
+// through. Such a send stays typed id, as it was before there was a pool.
+func (c *checker) poolMethod(sel string, class bool) *types.Method {
+	var found *types.Method
+	ok := true
+	consider := func(m *types.Method) {
+		if !ok || m.Sel != sel || m.Class != class {
+			return
+		}
+		if found == nil {
+			found = m
+			return
+		}
+		if c.methodShape(found) != c.methodShape(m) {
+			found, ok = nil, false
+		}
+	}
+	for _, k := range c.classOrder {
+		for _, m := range k.Methods {
+			consider(m)
+		}
+	}
+	for _, p := range c.protocolOrder {
+		for _, m := range p.Methods {
+			consider(m)
+		}
+	}
+	return found
+}
+
+// methodShape is everything about a method a *caller* has to agree with.
+//
+// Not the declared types: the call. Every object pointer travels the same
+// way, so -compare: returning NSComparisonResult for an NSString and for an
+// NSDate is one shape declared twice however the parameter is spelled —
+// which is the common case, since a selector shared by six classes is
+// usually shared with six different argument classes. What has to match is
+// what the registers hold.
+func (c *checker) methodShape(m *types.Method) string {
+	var b strings.Builder
+	b.WriteString(c.abiShape(m.Ret))
+	for _, p := range m.Params {
+		b.WriteByte(' ')
+		b.WriteString(c.abiShape(p.Type))
+	}
+	if m.Variadic {
+		b.WriteString(" ...")
+	}
+	return b.String()
+}
+
+// abiShape is how a value of t travels: which file it is in, and how wide.
+//
+// An aggregate is spelled out rather than sized, because two structures of
+// one size do not travel alike — a pair of floats and a pair of ints are
+// eight bytes each and arrive in different registers.
+func (c *checker) abiShape(t types.Type) string {
+	if t == nil {
+		return "?"
+	}
+	switch {
+	case types.IsVoid(t):
+		return "v"
+	case types.IsObjCObject(t) || types.IsPointer(t):
+		return "p"
+	case types.IsRecord(t) || types.IsArray(t):
+		return "agg:" + t.String()
+	}
+	n, ok := c.model.Sizeof(t)
+	if !ok {
+		return "?" + t.String()
+	}
+	if types.IsFloat(t) {
+		return "f" + strconv.FormatInt(n, 10)
+	}
+	return "i" + strconv.FormatInt(n, 10)
 }
 
 // lookupMethod searches what the receiver's type knows: the class and its

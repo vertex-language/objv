@@ -70,7 +70,7 @@ NSDictionary, and every class needs a root to inherit from.
 Used by `analyzer`, in `corpus_test.go`. The syntax corpus is run through the
 analyzer too, as a crash test.
 
-## lower/
+## eval/
 
 Does it become the right IR?
 
@@ -102,11 +102,42 @@ analyzer only has to know that NSNumber exists; lowering emits a real
 Used by `lower`, in `corpus_test.go`. The syntax corpus is run through
 lowering too, as a crash test.
 
-## What is not here yet
+## programs/
 
-The shape the rest will take, as each package that needs it lands:
+Does the program do what it says?
+
+Whole Objective-C programs against the real SDK, built twice — once by objv,
+once by clang — run, and compared. Nothing here writes down an expected value:
+a number beside a program is a claim that has to be maintained by hand and is
+wrong the moment the program drifts. clang's own output is a claim that
+maintains itself, and a disagreement with it is a bug in this compiler by
+definition.
+
+The files are meant to look like code someone would write — a word counter, a
+settings store, a little event bus — and to be dense in the constructs that
+meet each other only in real programs: a block captured by a collection, a
+category on a framework class, a property whose setter copies, a protocol
+dispatched through `id`, an exception crossing three frames. That is the
+point. Every other corpus tests a layer against what that layer is supposed to
+do; this one tests the compiler against a program, which is the only thing
+that finds what no layer's author thought to ask about.
+
+Each file is built in both memory models unless it says otherwise:
+
+```objc
+// mode: arc          // or mrr; the default is both
+// frameworks: AppKit // Foundation is always linked
+```
+
+Deterministic output only, on stdout: no clock, no addresses, no hash order,
+no concurrency. A dictionary's keys are sorted before they are printed, which
+is a thing the program has to do anyway.
+
+Used by `objv`, in `programs_test.go`. It is skipped off arm64 macOS and
+skipped without clang, because both halves of the comparison have to run.
+
+## What is not here yet
 
 | | |
 | --- | --- |
-| `run/` | Does the program do what it says? Whole programs, built and run twice — once by objv, once by clang — and compared. Nothing writes down an expected value: a number beside a program is a claim that has to be maintained by hand and is wrong the moment it drifts. Used by the `objv` package. |
 | `interop/` | Is what objv builds the same thing clang builds? A category compiled by clang, a class compiled by objv, one process. The metadata the runtime walks has to be the metadata clang emitted. |

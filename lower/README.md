@@ -459,7 +459,7 @@ expression:
 
 ## Tests
 
-`../tests/lower/` asks whether a file becomes the right IR. A file states what
+`../tests/eval/` asks whether a file becomes the right IR. A file states what
 it expects as substrings of the module text:
 
 ```objc

@@ -5,6 +5,7 @@ import (
 
 	"github.com/vertex-language/objv/ast"
 	"github.com/vertex-language/objv/runtime"
+	"github.com/vertex-language/objv/token"
 	"github.com/vertex-language/objv/types"
 )
 
@@ -467,4 +468,67 @@ func (u *unit) endLocal(l strongLocal) {
 		return
 	}
 	u.releaseStrongLocal(l.addr, l.typ)
+}
+
+// A writeback is §ARC 4.3.2's out-parameter: the temporary a call was handed,
+// and the variable whose value it stands in for.
+type writeback struct {
+	tmp ir.Ptr
+	dst ir.Ptr
+	typ types.Type
+}
+
+// arcOutArg is pass-by-writeback, and it is what every NSError** in Cocoa
+// depends on.
+//
+// `NSError *err = nil; [thing doIt:&err]` hands the callee the address of a
+// __strong variable, and what the callee writes through it is autoreleased:
+// nobody retained it. But the variable is one this frame releases where its
+// scope ends, so handing over its real address leaves the two disagreeing
+// about who owns the object — one release against no retain, which is a
+// crash at the caller's scope end rather than at the call.
+//
+// So the callee is handed a temporary instead, seeded with what the variable
+// holds, and whatever it left there is copied back afterwards with a retain.
+// The parameter is `T * __autoreleasing *` and the argument is `T __strong *`;
+// the temporary is where the two conventions meet.
+func (u *unit) arcOutArg(e ast.Expr, param types.Type) (ir.Value, *writeback) {
+	if !u.arcOn() {
+		return nil, nil
+	}
+	un, ok := stripParens(e).(*ast.UnaryExpr)
+	if !ok || un.Op != token.AND {
+		return nil, nil
+	}
+	p := types.AsPointer(types.Unqualify(param))
+	if p == nil || !objectValued(p.Elem) {
+		return nil, nil
+	}
+	// An explicit __autoreleasing or __unsafe_unretained on the pointee says
+	// the caller already knows: only a location this frame will release
+	// needs the detour.
+	inner := u.typeOf(un.X)
+	if !u.isStrong(inner) {
+		return nil, nil
+	}
+	addr, _ := u.lvalue(un.X)
+	if addr == nil {
+		return nil, nil
+	}
+
+	tmp := u.slot(inner, "")
+	u.fn.cur.Ptr.Store(u.fn.cur.Ptr.Load(*addr), tmp)
+	return tmp, &writeback{tmp: tmp, dst: *addr, typ: inner}
+}
+
+// applyWritebacks copies every out-parameter temporary back into the variable
+// it stood in for. Nothing was retained on the way in, so the store is the
+// ordinary one for a __strong location: retain the new, release the old.
+func (u *unit) applyWritebacks(wbs []*writeback) {
+	for _, w := range wbs {
+		if !u.at() {
+			return
+		}
+		u.storeStrong(w.dst, w.typ, u.fn.cur.Ptr.Load(w.tmp), false)
+	}
 }

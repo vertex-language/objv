@@ -1098,7 +1098,17 @@ func (u *unit) call(e *ast.CallExpr, t types.Type) ir.Value {
 		out = u.aggResult(fn.Ret)
 		args = append(args, out)
 	}
+	var wbs []*writeback
 	for i, a := range e.Args {
+		if i < len(fn.Params) {
+			// §ARC 4.3.2's out-parameter, which is handed a temporary and
+			// copied back after the call. See arc.go.
+			if v, wb := u.arcOutArg(a, fn.Params[i].Type); wb != nil {
+				args = append(args, v)
+				wbs = append(wbs, wb)
+				continue
+			}
+		}
 		v := u.rvalue(a)
 		if v == nil {
 			return nil
@@ -1134,6 +1144,7 @@ func (u *unit) call(e *ast.CallExpr, t types.Type) ir.Value {
 		if st := u.lookup(u.name(id)); st != nil && st.kind == stFunc {
 			if callee, ok := u.symOf(st).(ir.Callee); ok {
 				res := u.callMaybeUnwind(callee, args...)
+				u.applyWritebacks(wbs)
 				if out != (ir.Ptr{}) {
 					return out
 				}
@@ -1195,6 +1206,7 @@ func (u *unit) call(e *ast.CallExpr, t types.Type) ir.Value {
 		}
 	}
 	res := u.callIndMaybeUnwind(p, u.namedFuncType("fnsig", sig), args...)
+	u.applyWritebacks(wbs)
 	if out != (ir.Ptr{}) {
 		return out
 	}

@@ -37,13 +37,13 @@ import (
 // that catches the bugs: an initializer whose shape does not match its
 // declared type prints perfectly well.
 func TestLowerCorpus(t *testing.T) {
-	prelude, err := os.ReadFile("../tests/lower/prelude.txt")
+	prelude, err := os.ReadFile("../tests/eval/prelude.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
-	files, _ := filepath.Glob("../tests/lower/*.m")
+	files, _ := filepath.Glob("../tests/eval/*.m")
 	if len(files) == 0 {
-		t.Fatal("no files in ../tests/lower")
+		t.Fatal("no files in ../tests/eval")
 	}
 	for _, name := range files {
 		t.Run(filepath.Base(name), func(t *testing.T) {

@@ -582,7 +582,7 @@ func (u *unit) unwindCont(sig *ir.Sig) *ir.Block {
 	b := u.block("call.cont")
 	if sig != nil {
 		for i, r := range sig.Rets() {
-			b.Param(r.Type, "r"+itoa(i))
+			b.Param(r.Type, "r"+itoa(u.fn.nblocks)+"_"+itoa(i))
 		}
 	}
 	return b

@@ -27,6 +27,20 @@ import (
 // than bytes — so a literal with one non-ASCII character changes encoding,
 // section, and count all at once.
 func (u *unit) constantString(e *ast.StringLit) ir.Value {
+	sym := u.constantStringSymbol(e)
+	if sym == nil {
+		return nil
+	}
+	return u.fn.cur.Ptr.GetAddr(sym)
+}
+
+// constantStringSymbol is the object itself, for the two callers that want
+// different things from it: an expression wants its address, and a file-scope
+// initializer wants a relocation naming it. A @"…" is the one Objective-C
+// object a program may name before any class is realized, which is what makes
+// the second possible at all — `NSString *const D = @"…";` is every
+// framework's error domain.
+func (u *unit) constantStringSymbol(e *ast.StringLit) ir.Symbol {
 	val := analyzer.DecodeString(u.src, e, u.model, func(string) {})
 	units := val.Data
 	if n := len(units); n > 0 && units[n-1] == 0 {
@@ -51,7 +65,7 @@ func (u *unit) constantString(e *ast.StringLit) ir.Value {
 		}
 		key += sb.String()
 		if s, ok := u.strs[key]; ok {
-			return u.fn.cur.Ptr.GetAddr(s)
+			return s
 		}
 		data = u.cstringIn(sb.String(), runtime.SecCString, runtime.CStringLabel)
 	} else {
@@ -67,7 +81,7 @@ func (u *unit) constantString(e *ast.StringLit) ir.Value {
 		}
 		key += sb.String()
 		if s, ok := u.strs[key]; ok {
-			return u.fn.cur.Ptr.GetAddr(s)
+			return s
 		}
 		units = w
 		flags = runtime.CFStringUTF16
@@ -97,7 +111,7 @@ func (u *unit) constantString(e *ast.StringLit) ir.Value {
 			ir.RelocInit(data),
 			ir.Lit(ir.Int(int64(len(units))))))
 	u.strs[key] = g
-	return u.fn.cur.Ptr.GetAddr(g)
+	return g
 }
 
 // utf16Of re-reads a decoded literal's UTF-8 bytes as UTF-16 code units. A

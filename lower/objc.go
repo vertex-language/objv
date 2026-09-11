@@ -35,9 +35,19 @@ func (u *unit) message(e *ast.MessageExpr, t types.Type) ir.Value {
 		params = m.Params
 	}
 	var args []ir.Value
+	var wbs []*writeback
 	i := 0
 	for _, a := range e.Args {
 		for _, v := range a.Vals {
+			if i < len(params) {
+				// §ARC 4.3.2's out-parameter — [x doIt:&error]. See arc.go.
+				if out, wb := u.arcOutArg(v, params[i].Type); wb != nil {
+					args = append(args, out)
+					wbs = append(wbs, wb)
+					i++
+					continue
+				}
+			}
 			val := u.rvalue(v)
 			if val == nil {
 				return nil
@@ -67,6 +77,7 @@ func (u *unit) message(e *ast.MessageExpr, t types.Type) ir.Value {
 	}
 	variadic := m != nil && m.Variadic
 	v := u.sendWith(*recv, super, sel, args, params, variadic, ret, e)
+	u.applyWritebacks(wbs)
 
 	// §ARC's naming convention, applied. A method in one of the retaining
 	// families hands back an object the caller owns, and init hands back

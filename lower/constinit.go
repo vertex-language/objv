@@ -42,7 +42,15 @@ func (u *unit) constScalar(e ast.Expr, t types.Type) (ir.Init, bool) {
 		// is taken by constAddress below, which descends to this.
 		return u.compoundConst(cl)
 	}
-	if s, ok := stripParens(e).(*ast.StringLit); ok && !s.Object {
+	if s, ok := stripParens(e).(*ast.StringLit); ok {
+		if s.Object {
+			// @"…" is a constant object in the image, so its address is a
+			// link-time one like any other global's.
+			if sym := u.constantStringSymbol(s); sym != nil {
+				return ir.RelocInit(sym), true
+			}
+			return ir.Init{}, false
+		}
 		if types.IsArray(t) {
 			return u.constStringArray(s, t)
 		}
