@@ -214,6 +214,26 @@ order the body first named each one, which is the order they are laid out in.
 An instance variable inside a block captures `self`, because §4.5's `_count`
 is `self->_count` there as anywhere else.
 
+## Structs by value
+
+No calling convention passes a struct in a register, and what each does
+instead is a classification: AAPCS64 asks whether the aggregate is
+homogeneous, then whether it is sixteen bytes or less, and only then falls
+back to the caller's copy by reference; SysV sorts each eightbyte into
+INTEGER, SSE or MEMORY. Neither answer is derivable from the other.
+
+None of it is here. VIR states the *question* in the signature — `byval` on a
+pointer parameter says the bytes it points at are the argument, `sret` on the
+first says the callee writes its result through it — and the backend answers
+it per target. What this package owes is the rest: an aggregate argument has
+to be a *copy*, because the callee owns its parameter and may assign to it,
+and an aggregate result's storage is the caller's, allocated before the call.
+
+A send carries the same two attributes on the trampoline's type, with the
+hidden pointer in front of the receiver — which is where `objc_msgSend_stret`
+wants it on x86-64 and where X8 puts it on AArch64. `runtime.Send` picks
+which trampoline, because on AArch64 there is no `_stret` variant at all.
+
 ## Initializers
 
 `{ 1, 2, 3 }` and the object it fills are different shapes, and §6.7.9p17 says
@@ -236,8 +256,8 @@ expression:
 | --- | --- |
 | `__block` variables | a block captures a copy; `__block` shares the variable, through a structure with a reference count of its own that both the function and the block reach it through |
 | a block capturing a struct by value | a memcpy into the literal and one back out |
+| a struct in a variadic argument | legal C, but there is no declared parameter to hang `byval` on, so nothing states how it travels |
 | `@try` / `@catch` / `@finally` | needs every call inside the region to become an `invoke` with an unwind edge. `@throw` is lowered; the rest is not |
-| structs by value | a parameter, a return, or a message that returns one. Needs SysV and AAPCS classification, which is a package of its own |
 | bit-fields | reading, writing, and initializing one |
 | `@available` | needs the availability tables |
 | inline assembly | `ir` has an asm form; nothing maps constraints onto it yet |

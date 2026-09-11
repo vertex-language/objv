@@ -108,10 +108,17 @@ func (u *unit) recordType(r *types.Record) (*ir.Type, bool) {
 			Offset: uint64(offs[i]), HasOffset: true})
 	}
 
-	t := u.mod.Struct(name).Internal()
+	// Declared once, as what it is. Declaring a struct and then a union of
+	// the same name over it is two types with one name, which the module
+	// refuses — and refuses by the name alone, so the diagnostic points at a
+	// type nobody wrote.
+	var t *ir.Type
 	if r.Union {
-		t = u.mod.Union(name).Internal()
+		t = u.mod.Union(name)
+	} else {
+		t = u.mod.Struct(name)
 	}
+	t.Internal()
 	for _, f := range fields {
 		if r.Union {
 			t.Field(f.Name, f.Type)

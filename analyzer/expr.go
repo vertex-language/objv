@@ -873,8 +873,14 @@ func (c *checker) assignType(e *ast.AssignExpr) types.Type {
 // checkModifiable reports an assignment to something that cannot be assigned
 // to: a const object, an array, or an object the language declares read-only.
 func (c *checker) checkModifiable(at ast.Node, t types.Type) {
-	if e, ok := at.(ast.Expr); ok && c.checkCaptured(e) {
-		return
+	if e, ok := at.(ast.Expr); ok {
+		if c.checkCaptured(e) {
+			return
+		}
+		if what := notLvalue(e); what != "" {
+			c.report(e, "cannot assign to "+what+": it is not an lvalue")
+			return
+		}
 	}
 	switch {
 	case types.QualsOf(t)&types.QConst != 0:
@@ -912,6 +918,39 @@ func (c *checker) checkCaptured(e ast.Expr) bool {
 		return true
 	}
 	return false
+}
+
+// notLvalue names the expression form when it is certainly not an lvalue,
+// and returns "" when it is one or when this cannot tell.
+//
+// §6.3.2.1p1: an lvalue designates an object. A function call does not —
+// C++ made a call returning a class an lvalue and C did not — so `f().x = 1`
+// assigns to storage that has no name and no life after the statement. The
+// list is deliberately the certain cases only: reporting a real lvalue as
+// not one is worse than saying nothing, because the user cannot fix it.
+func notLvalue(e ast.Expr) string {
+	switch e := stripParens(e).(type) {
+	case *ast.CallExpr:
+		return "the result of a call"
+	case *ast.MessageExpr:
+		return "the result of a message send"
+	case *ast.CastExpr:
+		return "the result of a cast"
+	case *ast.BinaryExpr, *ast.CondExpr, *ast.IncDecExpr, *ast.SizeofExpr:
+		return "the result of an operator"
+	case *ast.BasicLit:
+		return "a constant"
+	case *ast.MemberExpr:
+		// A member of an lvalue is an lvalue and a member through a
+		// pointer always is; a member of something that is not is not.
+		if e.Op == token.ARROW {
+			return ""
+		}
+		if what := notLvalue(e.X); what != "" {
+			return "a member of " + what
+		}
+	}
+	return ""
 }
 
 func stripParens(e ast.Expr) ast.Expr {

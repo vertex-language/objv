@@ -28,6 +28,11 @@ type fnState struct {
 	self  ir.Ptr
 	class *types.Class
 
+	// sret is the storage the caller supplied for a result this function
+	// returns by writing rather than by value. A return statement copies
+	// into it; see agg.go.
+	sret ir.Ptr
+
 	// pools are the autorelease pool tokens of the enclosing
 	// @autoreleasepool blocks, innermost last.
 	pools []ir.Ptr
@@ -240,9 +245,25 @@ func (u *unit) declareFuncName(name string, t types.Type, at ast.Node) {
 // reporting. See describeSig.
 func (u *unit) sigOf(ft *types.Func) (*ir.Sig, string) {
 	sig := ir.NewSig()
+	// A result the caller supplies storage for comes first, which is
+	// §19.13's rule and is also every convention's: the hidden pointer
+	// precedes the real arguments wherever it travels in the argument
+	// sequence at all.
+	if isIndirectResult(ft.Ret) {
+		t, ok := u.aggType(ft.Ret)
+		if !ok {
+			return nil, "a return type of " + ft.Ret.String()
+		}
+		sig.Param(ir.TypePtr, ir.SRet(t))
+	}
 	for _, p := range ft.Params {
 		if isAggregate(p.Type) {
-			return nil, "a function taking a struct or union by value"
+			t, ok := u.aggType(p.Type)
+			if !ok {
+				return nil, "a parameter of type " + p.Type.String()
+			}
+			sig.Param(ir.TypePtr, ir.ByVal(t))
+			continue
 		}
 		r, ok := u.reg(p.Type)
 		if !ok {
@@ -253,10 +274,7 @@ func (u *unit) sigOf(ft *types.Func) (*ir.Sig, string) {
 	if ft.Variadic {
 		sig.Variadic()
 	}
-	if !types.IsVoid(ft.Ret) {
-		if isAggregate(ft.Ret) {
-			return nil, "a function returning a struct or union"
-		}
+	if !types.IsVoid(ft.Ret) && !isIndirectResult(ft.Ret) {
 		r, ok := u.reg(ft.Ret)
 		if !ok {
 			return nil, "a return type of " + ft.Ret.String()
@@ -447,8 +465,28 @@ func (u *unit) buildBody(fn *ir.Func, ft *types.Func, names []*ast.Ident,
 		}
 		return p.Name
 	}
+	// The result's storage, before every parameter: this function does not
+	// return a value at all, it writes one through the pointer its caller
+	// handed it.
+	if isIndirectResult(ft.Ret) {
+		t, ok := u.aggType(ft.Ret)
+		if !ok {
+			u.unsupported(stmts, "a return type of "+ft.Ret.String())
+			return
+		}
+		u.fn.sret = fn.ParamPtr("__ret", ir.SRet(t))
+	}
 	var values []ir.Value
 	for i, p := range ft.Params {
+		if isAggregate(p.Type) {
+			t, ok := u.aggType(p.Type)
+			if !ok {
+				u.unsupported(stmts, "a parameter of type "+p.Type.String())
+				return
+			}
+			values = append(values, fn.ParamPtr(paramName(i, p), ir.ByVal(t)))
+			continue
+		}
 		r, ok := u.reg(p.Type)
 		if !ok {
 			u.unsupported(stmts, "a parameter of type "+p.Type.String())
@@ -456,7 +494,7 @@ func (u *unit) buildBody(fn *ir.Func, ft *types.Func, names []*ast.Ident,
 		}
 		values = append(values, addParam(fn, r, paramName(i, p)))
 	}
-	if !types.IsVoid(ft.Ret) {
+	if !types.IsVoid(ft.Ret) && !isIndirectResult(ft.Ret) {
 		r, ok := u.reg(ft.Ret)
 		if !ok {
 			u.unsupported(stmts, "a return type of "+ft.Ret.String())
@@ -485,6 +523,14 @@ func (u *unit) buildBody(fn *ir.Func, ft *types.Func, names []*ast.Ident,
 	// block.
 	for i, p := range ft.Params {
 		name := paramName(i, p)
+		// An aggregate parameter is already storage this function owns: the
+		// convention says the caller copied it, so the pointer *is* the
+		// local and copying it again would be a second copy of a copy.
+		if isAggregate(p.Type) {
+			addr, _ := values[i].(ir.Ptr)
+			u.bind(name, &storage{kind: stLocal, typ: p.Type, addr: addr})
+			continue
+		}
 		// The slot is named apart from the parameter register: they are two
 		// registers, and one name printed twice is not a module the text
 		// format can read back.

@@ -201,6 +201,21 @@ func (u *unit) returnStmt(s *ast.ReturnStmt) {
 	if v == nil {
 		return
 	}
+	// A result the caller supplied storage for is returned by writing it
+	// there. The function's own result list is empty: what would be
+	// returned is already where the caller will read it.
+	if isIndirectResult(u.fn.ret) {
+		src, ok := v.(ir.Ptr)
+		if !ok {
+			u.errorf(s, "internal: an aggregate result is not an address")
+			return
+		}
+		u.copyAggregate(u.fn.sret, src, u.fn.ret)
+		u.releasePools()
+		u.fn.cur.Return()
+		u.fn.cur = nil
+		return
+	}
 	v = u.convert(v, u.typeOf(s.Result), u.fn.ret)
 	u.releasePools()
 	u.fn.cur.Return(v)

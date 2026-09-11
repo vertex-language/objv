@@ -50,6 +50,19 @@ func (u *unit) lvalue(e ast.Expr) (*ir.Ptr, types.Type) {
 		}
 		return nil, nil
 	}
+
+	// An aggregate rvalue has an address, because that is what an aggregate
+	// is here: a call or a send that returns a struct wrote it into storage
+	// the caller allocated, and the value of the expression is that
+	// storage. §6.5.2.3 does not make it an lvalue — `f().x = 1` is still
+	// not assignable, which the analyzer says — but `f().x` has to read
+	// from somewhere, and this is where.
+	if t := u.typeOf(e); isAggregate(t) {
+		if p, ok := u.rvalue(e).(ir.Ptr); ok {
+			return &p, t
+		}
+		return nil, nil
+	}
 	u.unsupported(e, "taking the address of this expression")
 	return nil, nil
 }

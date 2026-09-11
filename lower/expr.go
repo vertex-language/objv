@@ -1008,7 +1008,15 @@ func (u *unit) call(e *ast.CallExpr, t types.Type) ir.Value {
 		return nil
 	}
 
+	// The storage an aggregate result is written into, which is also the
+	// value of the call: an aggregate is held by address in this package,
+	// and the caller's storage is that address.
+	var out ir.Ptr
 	var args []ir.Value
+	if isIndirectResult(fn.Ret) {
+		out = u.aggResult(fn.Ret)
+		args = append(args, out)
+	}
 	for i, a := range e.Args {
 		v := u.rvalue(a)
 		if v == nil {
@@ -1017,7 +1025,22 @@ func (u *unit) call(e *ast.CallExpr, t types.Type) ir.Value {
 		at := u.typeOf(a)
 		if i < len(fn.Params) {
 			v = u.convert(v, at, fn.Params[i].Type)
+			if isAggregate(fn.Params[i].Type) {
+				copied, ok := u.aggArg(v, fn.Params[i].Type, a)
+				if !ok {
+					return nil
+				}
+				v = copied
+			}
 		} else {
+			if isAggregate(at) {
+				// A struct in the var-tail. It is legal C, and what the
+				// convention does with it is a classification this has no
+				// way to state: there is no declared parameter to hang
+				// byval on.
+				u.unsupported(a, "a struct or union in a variadic argument")
+				return nil
+			}
 			v = u.defaultPromote(v, at)
 		}
 		args = append(args, v)
@@ -1029,6 +1052,9 @@ func (u *unit) call(e *ast.CallExpr, t types.Type) ir.Value {
 		if st := u.lookup(u.name(id)); st != nil && st.kind == stFunc {
 			if callee, ok := u.symOf(st).(ir.Callee); ok {
 				res := u.fn.cur.Call(callee, args...)
+				if out != (ir.Ptr{}) {
+					return out
+				}
 				if types.IsVoid(fn.Ret) || res.Len() == 0 {
 					return nil
 				}
@@ -1049,16 +1075,35 @@ func (u *unit) call(e *ast.CallExpr, t types.Type) ir.Value {
 		return nil
 	}
 	sig := ir.NewSig()
-	for _, a := range args {
+	for i, a := range args {
 		r, ok := u.regOfValue(a)
 		if !ok {
 			u.errorf(e, "internal: %T is not a register value in an indirect call", a)
 			return nil
 		}
-		sig.Param(r)
+		// An aggregate is a pointer here whatever the convention does with
+		// it, so only the attribute tells the backend which pointer it is.
+		// The leading one is the result's storage, and the rest line up
+		// with the declared parameters.
+		switch {
+		case i == 0 && out != (ir.Ptr{}):
+			t, _ := u.aggType(fn.Ret)
+			sig.Param(r, ir.SRet(t))
+		default:
+			j := i
+			if out != (ir.Ptr{}) {
+				j--
+			}
+			if j < len(fn.Params) && isAggregate(fn.Params[j].Type) {
+				t, _ := u.aggType(fn.Params[j].Type)
+				sig.Param(r, ir.ByVal(t))
+				continue
+			}
+			sig.Param(r)
+		}
 	}
 	hasRet := false
-	if !types.IsVoid(fn.Ret) {
+	if !types.IsVoid(fn.Ret) && out == (ir.Ptr{}) {
 		if r, ok := u.reg(fn.Ret); ok {
 			sig.Ret(r)
 			hasRet = true
@@ -1068,6 +1113,9 @@ func (u *unit) call(e *ast.CallExpr, t types.Type) ir.Value {
 		}
 	}
 	res := u.fn.cur.CallInd(p, u.namedFuncType("fnsig", sig), args...)
+	if out != (ir.Ptr{}) {
+		return out
+	}
 	if !hasRet || res.Len() == 0 {
 		return nil
 	}

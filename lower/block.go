@@ -233,15 +233,13 @@ func blockSym(label func(string) string, name string) string {
 // block, so the body reads a capture exactly as it reads any other variable
 // and nothing below this has to know the difference.
 func (u *unit) blockInvoke(e *ast.BlockLit, sig *types.Func, caps []blockCapture, name string) *ir.Func {
-	if isAggregate(sig.Ret) {
-		u.unsupported(e, "a block returning a struct or union")
+	// The signature rules are a function's, which sigOf already states: an
+	// aggregate parameter travels as a byval pointer and an aggregate
+	// result as storage the caller supplied. This asks the same question
+	// and builds a function rather than a signature with the answer.
+	if _, why := u.sigOf(sig); why != "" {
+		u.unsupported(e, "a block with "+why)
 		return nil
-	}
-	for _, p := range sig.Params {
-		if _, ok := u.reg(p.Type); !ok || isAggregate(p.Type) {
-			u.unsupported(e, "a block parameter of type "+p.Type.String())
-			return nil
-		}
 	}
 	fn := u.mod.Func(u.sym(blockSym(runtime.BlockInvokeSymbol, name)))
 	fn.Internal()
@@ -264,13 +262,25 @@ func (u *unit) blockInvoke(e *ast.BlockLit, sig *types.Func, caps []blockCapture
 		u.fn, u.scope = prevFn, prevScope
 	}()
 
+	// The result's storage before everything — §19.13 wants sret first —
+	// and then the block, which invoke takes in front of every declared
+	// parameter.
+	if isIndirectResult(sig.Ret) {
+		t, _ := u.aggType(sig.Ret)
+		u.fn.sret = fn.ParamPtr("__ret", ir.SRet(t))
+	}
 	self := addParam(fn, ir.TypePtr, "block")
 	values := make([]ir.Value, len(sig.Params))
 	for i, p := range sig.Params {
+		if isAggregate(p.Type) {
+			t, _ := u.aggType(p.Type)
+			values[i] = fn.ParamPtr(paramNameAt(e, i, p), ir.ByVal(t))
+			continue
+		}
 		r, _ := u.reg(p.Type)
 		values[i] = addParam(fn, r, paramNameAt(e, i, p))
 	}
-	if !types.IsVoid(sig.Ret) {
+	if !types.IsVoid(sig.Ret) && !isIndirectResult(sig.Ret) {
 		r, _ := u.reg(sig.Ret)
 		setReturn(fn, r)
 	}
@@ -287,6 +297,13 @@ func (u *unit) blockInvoke(e *ast.BlockLit, sig *types.Func, caps []blockCapture
 	blk, _ := self.(ir.Ptr)
 	for i, p := range sig.Params {
 		n := paramNameAt(e, i, p)
+		if isAggregate(p.Type) {
+			// Already storage this function owns: the convention says the
+			// caller copied it, so a second copy is a copy of a copy.
+			addr, _ := values[i].(ir.Ptr)
+			u.bind(n, &storage{kind: stLocal, typ: p.Type, addr: addr})
+			continue
+		}
 		slot := u.slot(p.Type, n+"_addr")
 		u.storeTo(slot, values[i], p.Type)
 		u.bind(n, &storage{kind: stLocal, typ: p.Type, addr: slot})
@@ -528,7 +545,14 @@ func (u *unit) callBlock(e *ast.CallExpr, bt *types.Block) ir.Value {
 	if !ok {
 		return nil
 	}
+	// The result's storage in front of the block, which is where §19.13
+	// wants sret and where every convention puts the hidden pointer.
+	var out ir.Ptr
 	args := []ir.Value{p}
+	if isIndirectResult(sig.Ret) {
+		out = u.aggResult(sig.Ret)
+		args = []ir.Value{out, p}
+	}
 	for i, a := range e.Args {
 		v := u.rvalue(a)
 		if v == nil {
@@ -537,7 +561,18 @@ func (u *unit) callBlock(e *ast.CallExpr, bt *types.Block) ir.Value {
 		at := u.typeOf(a)
 		if i < len(sig.Params) {
 			v = u.convert(v, at, sig.Params[i].Type)
+			if isAggregate(sig.Params[i].Type) {
+				copied, ok := u.aggArg(v, sig.Params[i].Type, a)
+				if !ok {
+					return nil
+				}
+				v = copied
+			}
 		} else {
+			if isAggregate(at) {
+				u.unsupported(a, "a struct or union in a variadic argument")
+				return nil
+			}
 			v = u.defaultPromote(v, at)
 		}
 		args = append(args, v)
@@ -552,16 +587,30 @@ func (u *unit) callBlock(e *ast.CallExpr, bt *types.Block) ir.Value {
 	invoke := b.Ptr.Load(b.Ptr.Add(p, b.I64.Const(off)))
 
 	isig := ir.NewSig()
-	for _, a := range args {
+	lead := 1 // the block itself, which invoke takes in front
+	if out != (ir.Ptr{}) {
+		lead = 2
+	}
+	for i, a := range args {
 		r, ok := u.regOfValue(a)
 		if !ok {
 			u.errorf(e, "internal: an argument to a block is not a register value")
 			return nil
 		}
+		if i == 0 && out != (ir.Ptr{}) {
+			t, _ := u.aggType(sig.Ret)
+			isig.Param(r, ir.SRet(t))
+			continue
+		}
+		if j := i - lead; j >= 0 && j < len(sig.Params) && isAggregate(sig.Params[j].Type) {
+			t, _ := u.aggType(sig.Params[j].Type)
+			isig.Param(r, ir.ByVal(t))
+			continue
+		}
 		isig.Param(r)
 	}
 	hasRet := false
-	if !types.IsVoid(sig.Ret) {
+	if !types.IsVoid(sig.Ret) && out == (ir.Ptr{}) {
 		r, ok := u.reg(sig.Ret)
 		if !ok {
 			u.unsupported(e, "a block returning "+sig.Ret.String())
@@ -571,6 +620,9 @@ func (u *unit) callBlock(e *ast.CallExpr, bt *types.Block) ir.Value {
 		hasRet = true
 	}
 	res := b.CallInd(invoke, u.namedFuncType("blocksig", isig), args...)
+	if out != (ir.Ptr{}) {
+		return out
+	}
 	if !hasRet || res.Len() == 0 {
 		return nil
 	}

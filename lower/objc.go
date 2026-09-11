@@ -47,7 +47,13 @@ func (u *unit) message(e *ast.MessageExpr, t types.Type) ir.Value {
 				val = u.convert(val, at, params[i].Type)
 			} else {
 				// Past the declared parameters is the var-tail, where
-				// §6.5.2.2's promotions are all the callee can expect.
+				// §6.5.2.2's promotions are all the callee can expect --
+				// and where an aggregate has no declaration to hang byval
+				// on, so there is nothing to say about how it travels.
+				if isAggregate(at) {
+					u.unsupported(v, "a struct or union in a variadic argument")
+					return nil
+				}
 				val = u.defaultPromote(val, at)
 			}
 			args = append(args, val)
@@ -59,7 +65,7 @@ func (u *unit) message(e *ast.MessageExpr, t types.Type) ir.Value {
 	if m != nil {
 		ret = m.Ret
 	}
-	return u.send(*recv, super, sel, args, ret, e)
+	return u.sendWith(*recv, super, sel, args, params, ret, e)
 }
 
 // send emits one message: the call every Objective-C construct that means a
@@ -72,34 +78,75 @@ func (u *unit) message(e *ast.MessageExpr, t types.Type) ir.Value {
 // link.
 func (u *unit) send(recv ir.Value, super bool, sel string, args []ir.Value,
 	ret types.Type, at ast.Node) ir.Value {
+	return u.sendWith(recv, super, sel, args, nil, ret, at)
+}
+
+// sendWith is send with the method's declared parameters, which an aggregate
+// argument needs: a struct is a pointer at this level whatever the
+// convention does with it, and only the declaration says which pointer it is.
+func (u *unit) sendWith(recv ir.Value, super bool, sel string, args []ir.Value,
+	params []types.Param, ret types.Type, at ast.Node) ir.Value {
 
 	selp := u.selectorRef(sel)
 	if selp == nil {
 		return nil
 	}
-	all := append([]ir.Value{recv, selp}, args...)
+
+	// A result the caller supplies storage for goes in front of the
+	// receiver, which is where both conventions want it: on x86-64
+	// objc_msgSend_stret takes the pointer in RDI and self in RSI, and on
+	// AArch64 the pointer travels in X8 and self stays in X0. Writing it as
+	// §19.13's sret on the first parameter says the one thing, and each
+	// backend puts it where its own convention has it.
+	var out ir.Ptr
+	all := []ir.Value{recv, selp}
+	if isIndirectResult(ret) {
+		out = u.aggResult(ret)
+		all = append([]ir.Value{out}, all...)
+	}
+	for j, a := range args {
+		if j < len(params) && isAggregate(params[j].Type) {
+			copied, ok := u.aggArg(a, params[j].Type, at)
+			if !ok {
+				return nil
+			}
+			a = copied
+		}
+		all = append(all, a)
+	}
 
 	name := u.abi.Send(u.arch, ret, u.model, super)
-	if name == runtime.MsgSendStret || name == runtime.MsgSendSuper2Stret {
-		u.unsupported(at, "a message that returns a struct")
-		return nil
-	}
 
 	// The signature is the arguments' own. objc_msgSend forwards whatever
 	// it was handed, so the call site describes the *method* rather than
 	// the trampoline — which is why the same entry point is imported with
 	// one signature and called with many.
 	sig := ir.NewSig()
-	for _, a := range all {
+	for i, a := range all {
 		r, ok := u.regOfValue(a)
 		if !ok {
 			u.errorf(at, "internal: %T is not a register value in a send to %s", a, sel)
 			return nil
 		}
-		sig.Param(r)
+		switch {
+		case i == 0 && out != (ir.Ptr{}):
+			t, _ := u.aggType(ret)
+			sig.Param(r, ir.SRet(t))
+		default:
+			j := i - 2
+			if out != (ir.Ptr{}) {
+				j--
+			}
+			if j >= 0 && j < len(params) && isAggregate(params[j].Type) {
+				t, _ := u.aggType(params[j].Type)
+				sig.Param(r, ir.ByVal(t))
+				continue
+			}
+			sig.Param(r)
+		}
 	}
 	hasRet := false
-	if ret != nil && !types.IsVoid(ret) {
+	if ret != nil && !types.IsVoid(ret) && out == (ir.Ptr{}) {
 		if r, ok := u.reg(ret); ok {
 			sig.Ret(r)
 			hasRet = true
@@ -119,6 +166,9 @@ func (u *unit) send(recv ir.Value, super bool, sel string, args []ir.Value,
 	imp := u.extern(name, ir.NewSig().Param(ir.TypePtr).Param(ir.TypePtr).Variadic().Ret(ir.TypePtr))
 	fp := u.fn.cur.Ptr.GetAddr(imp)
 	res := u.fn.cur.CallInd(fp, fnTy, all...)
+	if out != (ir.Ptr{}) {
+		return out
+	}
 	if !hasRet || res.Len() == 0 {
 		return nil
 	}
@@ -143,6 +193,18 @@ func (u *unit) namedFuncType(prefix string, sig *ir.Sig) *ir.Type {
 	key := prefix
 	for _, p := range sig.Params() {
 		key += "_" + p.Type.String()
+		// The attributes are part of the shape, and so is the type each
+		// names. Two signatures of three pointers are two *different*
+		// signatures when one says the first is the caller's storage for a
+		// struct result — and two sret signatures are different when the
+		// structs are, because the backend classifies the type. Naming them
+		// alike would call one through the other's type.
+		for _, a := range p.Attrs {
+			key += "_" + a.String()
+			if at := a.Type(); at != nil {
+				key += "_" + at.Name()
+			}
+		}
 	}
 	for _, r := range sig.Rets() {
 		key += "_r" + r.Type.String()
