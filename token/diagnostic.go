@@ -39,6 +39,12 @@ type Diagnostic struct {
 // Print renders the diagnostic through the File that owns its span:
 // name:line:col: severity: message, in raw (as-typed) coordinates.
 func (d Diagnostic) Print(f *File) string {
+	// A diagnostic about something the source did not write has no position
+	// to print — a synthesized accessor, a compiler-generated method — and
+	// the file it belongs to is still the right thing to say.
+	if !d.Pos.IsValid() {
+		return fmt.Sprintf("%s: %s: %s", f.Name(), d.Severity, d.Message)
+	}
 	p := f.Position(d.Pos)
 	return fmt.Sprintf("%s:%d:%d: %s: %s", p.Filename, p.Line, p.Column, d.Severity, d.Message)
 }

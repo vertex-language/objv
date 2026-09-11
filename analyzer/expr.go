@@ -919,7 +919,7 @@ func (c *checker) checkModifiable(at ast.Node, t types.Type) {
 		if c.checkCaptured(e) {
 			return
 		}
-		if what := notLvalue(e); what != "" {
+		if what := c.notLvalue(e); what != "" {
 			c.report(e, "cannot assign to "+what+": it is not an lvalue")
 			return
 		}
@@ -970,7 +970,14 @@ func (c *checker) checkCaptured(e ast.Expr) bool {
 // assigns to storage that has no name and no life after the statement. The
 // list is deliberately the certain cases only: reporting a real lvalue as
 // not one is worse than saying nothing, because the user cannot fix it.
-func notLvalue(e ast.Expr) string {
+func (c *checker) notLvalue(e ast.Expr) string { return c.notLvalueIn(e, false) }
+
+// notLvalueIn is notLvalue with asBase saying whether the expression is the
+// left half of a member access rather than the thing being assigned to. The
+// distinction is one form: a property may be assigned to — that is the
+// setter — and a *member* of one may not, because what the getter returned
+// has no name and no life after the statement.
+func (c *checker) notLvalueIn(e ast.Expr, asBase bool) string {
 	switch e := stripParens(e).(type) {
 	case *ast.CallExpr:
 		return "the result of a call"
@@ -983,12 +990,27 @@ func notLvalue(e ast.Expr) string {
 	case *ast.BasicLit:
 		return "a constant"
 	case *ast.MemberExpr:
+		// Dot syntax on an object is a send. Assigning to it is the
+		// setter, and that is what `window.title = @"x"` means however
+		// many property reads are to its left. What has no name to assign
+		// to is a *member* of one: `view.frame.origin.x = 1` would write
+		// into the struct -frame returned, which nothing keeps.
+		if c.info.Props[e] != nil {
+			if asBase {
+				return "a property"
+			}
+			return ""
+		}
 		// A member of an lvalue is an lvalue and a member through a
 		// pointer always is; a member of something that is not is not.
 		if e.Op == token.ARROW {
 			return ""
 		}
-		if what := notLvalue(e.X); what != "" {
+		if what := c.notLvalueIn(e.X, true); what != "" {
+			// One "a member of" says it; three is the nesting talking.
+			if strings.HasPrefix(what, "a member of ") {
+				return what
+			}
 			return "a member of " + what
 		}
 	}

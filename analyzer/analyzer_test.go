@@ -677,3 +677,25 @@ func TestConstObjectFoldsAsAConstant(t *testing.T) {
 	wantError(t, 0, `long mutableBase = 1; enum { D = mutableBase };`,
 		"must be an integer constant expression")
 }
+
+// Dot syntax on an object is a send, and assigning to it is the setter —
+// however many property reads are to its left. `window.title = @"x"` is
+// three sends and legal; `view.frame.origin.x = 1` writes into the struct
+// -frame returned, which nothing keeps.
+func TestPropertyAssignmentAndItsMembers(t *testing.T) {
+	clean(t, 0, `
+	@interface Win : NSObject
+	@property (copy) NSString *title;
+	@end
+	@interface Holder : NSObject
+	@property (strong) Win *window;
+	@end
+	void f(Holder *h) { h.window.title = @"x"; }`)
+
+	wantError(t, 0, `
+	typedef struct { double x, y; } Pt;
+	@interface View : NSObject
+	@property Pt origin;
+	@end
+	void f(View *v) { v.origin.x = 1; }`, "cannot assign to a member of a property")
+}

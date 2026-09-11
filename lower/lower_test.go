@@ -391,3 +391,32 @@ func TestNoARCEmitsNothing(t *testing.T) {
 		}
 	}
 }
+
+// A struct-valued property's accessors travel the way every other aggregate
+// does: the result comes back through storage the caller supplied, and the
+// argument arrives as a pointer to the caller's copy. A send described
+// without those attributes passes a pointer where the method reads
+// registers, which compiles and returns the wrong struct.
+func TestStructPropertyAccessors(t *testing.T) {
+	out, diags := build(t, `
+__attribute__((objc_root_class)) @interface NSObject @end
+typedef struct { double x, y; } Pt;
+@interface Framed : NSObject
+@property (nonatomic, assign) Pt origin;
+@end
+@implementation Framed
+@end
+double readIt(Framed *f) { return f.origin.x; }
+void writeIt(Framed *f, Pt p) { f.origin = p; }
+`)
+	for _, d := range diags {
+		t.Errorf("%s", d.Message)
+	}
+	mustContain(t,
+		out,
+		"@__i_Framed__origin(%__ret ptr sret",
+		"@__i_Framed__setOrigin_(%self ptr, %_cmd ptr, %value ptr byval",
+		"_sret_", // the send's own type says so too
+		"_byval_",
+	)
+}

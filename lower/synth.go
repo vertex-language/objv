@@ -52,34 +52,56 @@ func (u *unit) synthesizeAccessors(k *types.Class, written map[string]bool) {
 // The unit's function state is swapped for the duration, exactly as a
 // block's invoke function swaps it: this is a whole function being emitted
 // while another declaration is being walked.
-func (u *unit) accessor(k *types.Class, sel string, value types.Type) (fn *ir.Func, self, cmd ir.Ptr, val ir.Value, ok bool) {
+func (u *unit) accessor(k *types.Class, sel string, value types.Type) (fn *ir.Func, self, cmd, sret ir.Ptr, val ir.Value, ok bool) {
 	m := k.Lookup(sel, false)
 	if m == nil {
-		return nil, ir.Ptr{}, ir.Ptr{}, nil, false
+		return nil, ir.Ptr{}, ir.Ptr{}, ir.Ptr{}, nil, false
 	}
 	fn = u.mod.Func(u.sym(runtime.MethodSymbol(k.Name, "", sel, false))).Internal()
 
+	// A struct-valued property is read and written like any other value
+	// this size: the result comes back through storage the caller supplied,
+	// and the argument arrives as a pointer to the caller's copy. agg.go
+	// has the rules; what is different here is only that no source wrote
+	// the parameter list.
+	if isIndirectResult(m.Ret) {
+		t, okAgg := u.aggType(m.Ret)
+		if !okAgg {
+			u.unsupported(nil, "a synthesized getter returning "+m.Ret.String())
+			return nil, ir.Ptr{}, ir.Ptr{}, ir.Ptr{}, nil, false
+		}
+		sret = fn.ParamPtr("__ret", ir.SRet(t))
+	}
 	self = fn.ParamPtr("self")
 	cmd = fn.ParamPtr("_cmd")
 	if value != nil {
-		r, okReg := u.reg(value)
-		if !okReg {
-			u.unsupported(nil, "a synthesized setter taking "+value.String())
-			return nil, ir.Ptr{}, ir.Ptr{}, nil, false
+		if isAggregate(value) {
+			t, okAgg := u.aggType(value)
+			if !okAgg {
+				u.unsupported(nil, "a synthesized setter taking "+value.String())
+				return nil, ir.Ptr{}, ir.Ptr{}, ir.Ptr{}, nil, false
+			}
+			val = fn.ParamPtr("value", ir.ByVal(t))
+		} else {
+			r, okReg := u.reg(value)
+			if !okReg {
+				u.unsupported(nil, "a synthesized setter taking "+value.String())
+				return nil, ir.Ptr{}, ir.Ptr{}, ir.Ptr{}, nil, false
+			}
+			val = addParam(fn, r, "value")
 		}
-		val = addParam(fn, r, "value")
 	}
-	if !types.IsVoid(m.Ret) {
+	if !types.IsVoid(m.Ret) && !isIndirectResult(m.Ret) {
 		r, okReg := u.reg(m.Ret)
 		if !okReg {
 			u.unsupported(nil, "a synthesized getter returning "+m.Ret.String())
-			return nil, ir.Ptr{}, ir.Ptr{}, nil, false
+			return nil, ir.Ptr{}, ir.Ptr{}, ir.Ptr{}, nil, false
 		}
 		setReturn(fn, r)
 	}
 
 	u.methodFns = append(u.methodFns, methodFn{class: k, sig: m, fn: fn})
-	return fn, self, cmd, val, true
+	return fn, self, cmd, sret, val, true
 }
 
 // enterAccessor makes fn the function being emitted and returns what puts the
@@ -100,15 +122,24 @@ func (u *unit) enterAccessor(fn *ir.Func, ret types.Type, k *types.Class) func()
 // synthesizeGetter is `- (T)name { return self->_name; }`, or the runtime
 // call an atomic object property needs instead.
 func (u *unit) synthesizeGetter(k *types.Class, p *types.Property) {
-	fn, self, cmd, _, ok := u.accessor(k, p.Getter, nil)
+	fn, self, cmd, sret, _, ok := u.accessor(k, p.Getter, nil)
 	if !ok {
 		return
 	}
 	leave := u.enterAccessor(fn, p.Type, k)
 	defer leave()
+	u.fn.sret = sret
 	b := u.fn.cur
 
 	off := u.ivarOffset(k, p.Ivar)
+	if isIndirectResult(p.Type) {
+		// The result is written into the caller's storage, and the function
+		// returns nothing: what would come back is already where the caller
+		// will read it.
+		u.copyAggregate(sret, b.Ptr.Add(self, off), p.Type)
+		b.Return()
+		return
+	}
 	if u.isWeak(p.Type) {
 		// A weak getter reads through the runtime, which hands back a value
 		// it has autoreleased — the object may go away between the read and
@@ -144,7 +175,7 @@ func (u *unit) synthesizeGetter(k *types.Class, p *types.Property) {
 // synthesizeSetter is `- (void)setName:(T)v { self->_name = v; }`, or the
 // runtime call a property that owns its value needs instead.
 func (u *unit) synthesizeSetter(k *types.Class, p *types.Property) {
-	fn, self, cmd, val, ok := u.accessor(k, p.Setter, p.Type)
+	fn, self, cmd, _, val, ok := u.accessor(k, p.Setter, p.Type)
 	if !ok {
 		return
 	}
@@ -153,6 +184,15 @@ func (u *unit) synthesizeSetter(k *types.Class, p *types.Property) {
 	b := u.fn.cur
 
 	off := u.ivarOffset(k, p.Ivar)
+	if isAggregate(p.Type) {
+		src, okPtr := val.(ir.Ptr)
+		if !okPtr {
+			return
+		}
+		u.copyAggregate(b.Ptr.Add(self, off), src, p.Type)
+		b.Return()
+		return
+	}
 	if u.isWeak(p.Type) {
 		u.storeWeak(b.Ptr.Add(self, off), val)
 		b.Return()

@@ -255,3 +255,16 @@ func TestDiagnosticPrint(t *testing.T) {
 		t.Errorf("Print = %q, want %q", got, want)
 	}
 }
+
+// A diagnostic about something the source did not write — a synthesized
+// accessor, a compiler-generated method — has no position to print, and the
+// file it belongs to is still the right thing to say. Printing one used to
+// panic, which turned a diagnostic into a crash.
+func TestPrintDiagnosticWithoutAPosition(t *testing.T) {
+	f := NewFile("t.m", []byte("int x;\n"))
+	d := Diagnostic{Severity: Error, Message: "no position here"}
+	got := d.Print(f)
+	if want := "t.m: error: no position here"; got != want {
+		t.Errorf("Print = %q, want %q", got, want)
+	}
+}

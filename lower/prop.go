@@ -90,10 +90,18 @@ func (r *objcRef) load(u *unit) ir.Value {
 // index. That is the selector's shape and not a choice this makes.
 func (r *objcRef) store(u *unit, v ir.Value) ir.Value {
 	args := []ir.Value{v}
+	params := []types.Param{{Type: r.typ}}
 	if r.index != nil {
 		args = append(args, r.index)
+		// A subscript's setter takes the object and then the index, and
+		// neither is an aggregate.
+		params = nil
 	}
-	u.send(r.recv, r.super, r.set, args, types.Typ(types.Void), r.at)
+	// The setter's parameter is the property's type, and saying so is not
+	// decoration: a struct travels by the convention byval names, and a
+	// send described without it passes a pointer where the method reads
+	// registers. See agg.go.
+	u.sendWith(r.recv, r.super, r.set, args, params, false, types.Typ(types.Void), r.at)
 	return v
 }
 

@@ -107,6 +107,17 @@ func linkMachO(t Target, p linkParams) error {
 			target.MinOS = v
 		}
 	}
+	// And the SDK the headers came from. It is not bookkeeping: AppKit asks
+	// dyld which SDK an app was built against and changes its behaviour on
+	// the answer, so an image that records none gets the compatibility path
+	// — a window built against a 26.0 SDK comes back four points shorter
+	// than the same source compiled by clang, because AppKit believes it is
+	// older than it is.
+	if v := p.Sysroot.SDK.Version; !v.IsZero() {
+		if sv, err := macho.ParseVersion(v.String()); err == nil {
+			target.SDK = sv
+		}
+	}
 
 	l, err := macholink.New(target)
 	if err != nil {

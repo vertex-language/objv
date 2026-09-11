@@ -57,3 +57,19 @@
 @end
 // vir: i32.const 42
 // vir: internal func @__i_Manual__setN_(
+
+// A struct-valued property is read through its getter like any other, and a
+// member of the result reads from the storage the send wrote into — which is
+// how half of AppKit is written. It is not an lvalue, which the analyzer
+// refuses; it has an address, which this needs.
+struct Rect { double x, y, w, h; };
+
+@interface Framed : NSObject
+@property (nonatomic, assign) struct Rect frame;
+@end
+
+@implementation Framed
+@end
+
+double widthOf(Framed *f) { return f.frame.w; }
+// vir: @msgsig_ptr_sret_struct_Rect_ptr_ptr

@@ -151,7 +151,20 @@ func (u *unit) memberAddr(e *ast.MemberExpr) (*ir.Ptr, types.Type) {
 	// Property dot syntax is a message send, and a send has no address:
 	// reading and writing one go through prop.go, and anything that got
 	// here wanted the address of a value that is not in memory.
+	//
+	// A struct-valued property is the exception, and not really one: an
+	// aggregate is held by address here, so the getter's result *is*
+	// storage — the storage the send wrote into. `window.frame.size.width`
+	// reads a member of it, which §6.5.2.3 allows and which is how half of
+	// AppKit is written. It is still not an lvalue: assigning to it is the
+	// analyzer's to refuse, and it does.
 	if p := u.info.Props[e]; p != nil {
+		if t := u.typeOf(e); isAggregate(t) {
+			if addr, ok := u.rvalue(e).(ir.Ptr); ok {
+				return &addr, t
+			}
+			return nil, nil
+		}
 		u.errorf(e, "a property is not an lvalue: %s is read through %s",
 			p.Name, p.Getter)
 		return nil, nil
