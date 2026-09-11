@@ -310,6 +310,16 @@ func (u *unit) declareGlobalVar(name string, t types.Type, sp declSpec, at ast.N
 	u.top.names[name] = &storage{kind: stGlobal, typ: t, sym: g}
 }
 
+// funcFor is the ir.Func a name denotes in this unit, made on first ask.
+func (u *unit) funcFor(name string) *ir.Func {
+	if fn := u.funcs[name]; fn != nil {
+		return fn
+	}
+	fn := u.mod.Func(u.sym(name))
+	u.funcs[name] = fn
+	return fn
+}
+
 func (u *unit) declareFunc(d *ast.FuncDecl) {
 	t := u.typeOf(d)
 	if t == nil || d.Name == nil {
@@ -350,6 +360,82 @@ func (u *unit) declareFuncName(name string, t types.Type, at ast.Node) {
 	}
 	u.top.names[name] = &storage{kind: stFunc, typ: t,
 		imp: &pendingImport{sym: u.sym(name), sig: sig}}
+}
+
+// A funcSig is what a function's signature produced: its parameter values and
+// the storage a result too large to return in registers is written through.
+type funcSig struct {
+	values []ir.Value
+	sret   ir.Ptr
+}
+
+// funcSignature gives fn its parameters and its result, once.
+//
+// Apart from the body because a *call* has to see the signature before the
+// body is lowered — a function defined further down the file is called from
+// one lowered above it — and because parameters may only be added to an
+// ir.Func before its entry block exists. So every definition in the unit gets
+// its signature in one pass and its body in the next, and this is what the
+// first pass runs. See defineFile.
+func (u *unit) funcSignature(fn *ir.Func, ft *types.Func, names []*ast.Ident, at ast.Node) (funcSig, bool) {
+	if sig, ok := u.sigs[fn]; ok {
+		return sig, true
+	}
+	var sig funcSig
+	// The result's storage, before every parameter: such a function does not
+	// return a value at all, it writes one through the pointer its caller
+	// handed it.
+	if isIndirectResult(ft.Ret) {
+		t, ok := u.aggType(ft.Ret)
+		if !ok {
+			u.unsupported(at, "a return type of "+ft.Ret.String())
+			return sig, false
+		}
+		sig.sret = fn.ParamPtr("__ret", ir.SRet(t))
+	}
+	for i, p := range ft.Params {
+		name := declParamName(u, names, i, p)
+		if isAggregate(p.Type) {
+			t, ok := u.aggType(p.Type)
+			if !ok {
+				u.unsupported(at, "a parameter of type "+p.Type.String())
+				return sig, false
+			}
+			sig.values = append(sig.values, fn.ParamPtr(name, ir.ByVal(t)))
+			continue
+		}
+		r, ok := u.reg(p.Type)
+		if !ok {
+			u.unsupported(at, "a parameter of type "+p.Type.String())
+			return sig, false
+		}
+		sig.values = append(sig.values, addParam(fn, r, name))
+	}
+	if ft.Variadic {
+		// The var-tail is part of the signature and not only of the call:
+		// va_start needs to know this function has one, and a call to it
+		// needs to know which arguments the declaration named.
+		fn.Variadic()
+	}
+	if !types.IsVoid(ft.Ret) && !isIndirectResult(ft.Ret) {
+		r, ok := u.reg(ft.Ret)
+		if !ok {
+			u.unsupported(at, "a return type of "+ft.Ret.String())
+			return sig, false
+		}
+		setReturn(fn, r)
+	}
+	u.sigs[fn] = sig
+	return sig, true
+}
+
+// declParamName is the name a parameter is known by: the definition's, where
+// there is one, and the declaration's otherwise.
+func declParamName(u *unit, names []*ast.Ident, i int, p types.Param) string {
+	if i < len(names) && names[i] != nil {
+		return u.name(names[i])
+	}
+	return p.Name
 }
 
 // sigOf builds a signature. A parameter or a return value that is not held
@@ -405,6 +491,23 @@ func (u *unit) sigOf(ft *types.Func) (*ir.Sig, string) {
 // ---- pass two: define ----
 
 func (u *unit) defineFile() {
+	// Every definition's signature before any body, so that a call to a
+	// function defined further down the file sees the arity it will have.
+	// C admits the shape — a prototype above, the definition below — and it
+	// is how any file with mutual recursion in it is written.
+	for _, d := range u.fileScope() {
+		fd, ok := d.(*ast.FuncDecl)
+		if !ok || fd.Body == nil || fd.Name == nil {
+			continue
+		}
+		t := u.typeOf(fd)
+		ft, isFunc := types.Unqualify(t).(*types.Func)
+		if !isFunc || u.notEmitted(u.name(fd.Name), fd) {
+			continue
+		}
+		u.funcSignature(u.funcFor(u.name(fd.Name)), ft, paramNames(fd), fd)
+	}
+
 	for _, d := range u.file.Decls {
 		switch d := d.(type) {
 		case *ast.FuncDecl:
@@ -460,11 +563,7 @@ func (u *unit) defineFunc(d *ast.FuncDecl) {
 	if u.notEmitted(name, d) {
 		return
 	}
-	fn := u.funcs[name]
-	if fn == nil {
-		fn = u.mod.Func(u.sym(name))
-		u.funcs[name] = fn
-	}
+	fn := u.funcFor(name)
 	// An inline definition is emitted internal, not exported. §6.7.4p7 says
 	// it provides no external definition, so the one unit that wrote
 	// `extern inline int f(void);` owns the name -- and every other unit
@@ -580,57 +679,12 @@ func (u *unit) buildBody(fn *ir.Func, ft *types.Func, names []*ast.Ident,
 		u.fn = prev
 	}()
 
-	// The parameters are declared before the entry block, because a block
-	// freezes the signature the first time it is written into.
-	paramName := func(i int, p types.Param) string {
-		if i < len(names) && names[i] != nil {
-			return u.name(names[i])
-		}
-		return p.Name
+	sig, ok := u.funcSignature(fn, ft, names, stmts)
+	if !ok {
+		return
 	}
-	// The result's storage, before every parameter: this function does not
-	// return a value at all, it writes one through the pointer its caller
-	// handed it.
-	if isIndirectResult(ft.Ret) {
-		t, ok := u.aggType(ft.Ret)
-		if !ok {
-			u.unsupported(stmts, "a return type of "+ft.Ret.String())
-			return
-		}
-		u.fn.sret = fn.ParamPtr("__ret", ir.SRet(t))
-	}
-	var values []ir.Value
-	for i, p := range ft.Params {
-		if isAggregate(p.Type) {
-			t, ok := u.aggType(p.Type)
-			if !ok {
-				u.unsupported(stmts, "a parameter of type "+p.Type.String())
-				return
-			}
-			values = append(values, fn.ParamPtr(paramName(i, p), ir.ByVal(t)))
-			continue
-		}
-		r, ok := u.reg(p.Type)
-		if !ok {
-			u.unsupported(stmts, "a parameter of type "+p.Type.String())
-			return
-		}
-		values = append(values, addParam(fn, r, paramName(i, p)))
-	}
-	if ft.Variadic {
-		// The var-tail is part of the signature and not only of the call:
-		// va_start needs to know this function has one, and a call to it
-		// needs to know which arguments the declaration named.
-		fn.Variadic()
-	}
-	if !types.IsVoid(ft.Ret) && !isIndirectResult(ft.Ret) {
-		r, ok := u.reg(ft.Ret)
-		if !ok {
-			u.unsupported(stmts, "a return type of "+ft.Ret.String())
-			return
-		}
-		setReturn(fn, r)
-	}
+	u.fn.sret = sig.sret
+	values := sig.values
 
 	// The entry block holds allocations and nothing else, and the body goes
 	// in a block of its own.
@@ -651,7 +705,7 @@ func (u *unit) buildBody(fn *ir.Func, ft *types.Func, names []*ast.Ident,
 	// ordinary local: it may be assigned, addressed, or captured by a
 	// block.
 	for i, p := range ft.Params {
-		name := paramName(i, p)
+		name := declParamName(u, names, i, p)
 		// An aggregate parameter is already storage this function owns: the
 		// convention says the caller copied it, so the pointer *is* the
 		// local and copying it again would be a second copy of a copy.

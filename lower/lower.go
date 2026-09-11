@@ -133,6 +133,11 @@ type unit struct {
 	// one symbol.
 	classSyms map[string]ir.Symbol
 
+	// sigs is each function's parameter list, built once: a call has to see
+	// the signature before the body is lowered, and parameters may only be
+	// added before the entry block exists. See funcSignature.
+	sigs map[*ir.Func]funcSig
+
 	// ehTypes are the type-info objects this unit defined, one per class it
 	// implements and something here catches. See try.go.
 	ehTypes map[string]ir.Symbol
@@ -249,6 +254,7 @@ func newUnit(src *token.File, file *ast.File, info *analyzer.Info, opt Options) 
 		cstrs:      map[string]ir.Symbol{},
 		externs:    map[string]*ir.FuncImport{},
 		classSyms:  map[string]ir.Symbol{},
+		sigs:       map[*ir.Func]funcSig{},
 		ehTypes:    map[string]ir.Symbol{},
 		defines:    map[string]bool{},
 		definesVar: map[string]bool{},

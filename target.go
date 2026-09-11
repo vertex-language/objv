@@ -137,6 +137,9 @@ func darwinARM64() types.Model {
 	// pointer at the next one. The base standard's AArch64 does not, and
 	// its list is four fields and two saved regions.
 	m.VaListSize = 8
+	// And BOOL is bool here, which it is on no other target objv models.
+	// See types.Model.
+	m.ObjCBoolIsBool = true
 	return m
 }
 

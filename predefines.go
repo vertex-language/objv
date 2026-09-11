@@ -107,15 +107,21 @@ func (t Target) Predefines() []preprocessor.Predefine {
 		def(d[0], d[1])
 	}
 
-	// The Objective-C runtime's own two, which <objc/objc.h> and
-	// <objc/runtime.h> read. Which runtime this is is a fact of the target
-	// and not of the language, which is why the preprocessor's own ObjC
-	// predefines do not include them.
-	if t.abi.Kind == 0 { // AppleModern
-		def("__OBJC_BOOL_IS_BOOL", "0")
-	} else {
-		def("__OBJC_BOOL_IS_BOOL", "1")
+	// What BOOL is, which <objc/objc.h> reads in preference to guessing
+	// from TARGET_OS_*.
+	//
+	// It is a fact about the *architecture*. Apple's 64-bit ARM ABI made
+	// BOOL a one-byte `bool`; the x86_64 Mac kept the `signed char` it
+	// shipped with, and so does every other target. clang says the same
+	// thing with useSignedCharForObjCBool, and getting it wrong is not a
+	// warning: @encode(BOOL) becomes "c" where the runtime and every other
+	// object file say "B", which is the type encoding a method list
+	// publishes and an NSInvocation reads back.
+	boolIsBool := "0"
+	if m.ObjCBoolIsBool {
+		boolIsBool = "1"
 	}
+	def("__OBJC_BOOL_IS_BOOL", boolIsBool)
 	return ds
 }
 

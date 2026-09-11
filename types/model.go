@@ -35,6 +35,20 @@ type Model struct {
 	// to the compiler. Windows sets it; nothing else does.
 	MSBitfields bool
 
+	// ObjCBoolIsBool says BOOL is `bool` rather than `signed char`.
+	//
+	// Apple's 64-bit ARM ABI made it a one-byte bool; the x86_64 Mac kept
+	// the signed char it shipped with, and so does every other target.
+	// clang says the same thing with useSignedCharForObjCBool and publishes
+	// it as __OBJC_BOOL_IS_BOOL, which <objc/objc.h> reads in preference to
+	// guessing from TARGET_OS_*.
+	//
+	// It is an ABI and not a preference: @encode(BOOL) is what a method
+	// list publishes and what an NSInvocation reads back, and "c" where
+	// every other object file says "B" is a disagreement the runtime acts
+	// on.
+	ObjCBoolIsBool bool
+
 	// VaListSize is how many bytes an object of type __builtin_va_list
 	// occupies, and zero means one pointer.
 	//

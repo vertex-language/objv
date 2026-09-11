@@ -64,6 +64,11 @@ type symbol struct {
 	// does not capture it.
 	static bool
 
+	// builtin marks one of the Objective-C names this compiler knows
+	// before any header does. A typedef read from a header replaces it;
+	// nothing else may.
+	builtin bool
+
 	// folded is the value a const-qualified integer object was initialized
 	// with, when that initializer was itself a constant expression.
 	//
@@ -194,6 +199,11 @@ func (c *checker) declare(id *ast.Ident, s *symbol) {
 		case prev.kind == symEnumConst:
 			c.report(id, "enumeration constant '"+name+"' redeclared")
 			return
+		case prev.kind == symTypedef && prev.builtin:
+			// The built-in id, Class, SEL, IMP and BOOL are placeholders
+			// for what <objc/objc.h> declares, so that a fragment read with
+			// no headers still typechecks. The header's declaration is the
+			// real one and replaces them.
 		case prev.kind == symTypedef, prev.extern && s.extern:
 			return // permitted; keep the first
 		default:

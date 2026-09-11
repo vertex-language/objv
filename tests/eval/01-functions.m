@@ -69,3 +69,13 @@ int nulls(const char *p) { return p == 0 || p == (void *)0; }
 // A null pointer constant is the null pointer, not an address computed by
 // adding zero to one.
 // vir-not: ptr.add
+
+// A function defined further down the file, called from one lowered above
+// it: every definition's signature is built before any body, because a call
+// has to see the arity it will have and parameters may only be added to a
+// function before its entry block exists.
+static void later(int a, int b);
+int earlier(int n);
+int earlier(int n) { later(n, n + 1); return n; }
+static void later(int a, int b) { (void)a; (void)b; }
+// vir: call @_later(

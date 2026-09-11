@@ -855,6 +855,14 @@ func (c *checker) inferArrayLen(init ast.Expr) (int64, bool) {
 // has them, no program may redefine them, and a compiler that only knew them
 // when the header was read could not check a fragment. A declaration read
 // from the header replaces these, since a typedef may redeclare a typedef.
+// boolType is what BOOL is on this target. See types.Model.
+func (c *checker) boolType() types.Type {
+	if c.model.ObjCBoolIsBool {
+		return types.Typ(types.Bool)
+	}
+	return types.Typ(types.SChar)
+}
+
 func (c *checker) declareBuiltinTypes() {
 	imp := &types.Func{Ret: types.ID(), Proto: false}
 	for _, d := range []struct {
@@ -865,9 +873,9 @@ func (c *checker) declareBuiltinTypes() {
 		{"Class", types.ClassObject()},
 		{"SEL", types.NewSelector()},
 		{"IMP", &types.Pointer{Elem: imp}},
-		{"BOOL", types.Typ(types.SChar)},
+		{"BOOL", c.boolType()},
 	} {
-		c.declareName(d.name, &symbol{kind: symTypedef, typ: d.t})
+		c.declareName(d.name, &symbol{kind: symTypedef, typ: d.t, builtin: true})
 	}
 	// Protocol is a class, not a typedef: <objc/objc.h> declares it with
 	// @class under __OBJC__.

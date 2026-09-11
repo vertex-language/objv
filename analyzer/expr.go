@@ -428,7 +428,11 @@ func (c *checker) indexType(e *ast.IndexExpr) types.Type {
 // exist on the receiver — the syntax is sugar for a send, and a send to a
 // method nobody declared is what the runtime would fail on.
 func (c *checker) subscriptSend(e *ast.IndexExpr, recv, index types.Type, assigning bool) types.Type {
-	keyed := index != nil && types.IsObjectPointer(index)
+	// IsObjCObject and not IsObjectPointer: a block is an object and so is
+	// §5.5's type parameter, erased. `dict[keys[i]]` on an unspecialized
+	// NSArray subscripts with ObjectType, which is id by the time there is
+	// a value — and a keyed subscript is what it is.
+	keyed := index != nil && types.IsObjCObject(index)
 	if index != nil && !keyed && !types.IsInteger(index) {
 		c.report(e, "an object subscript is an integer or an object pointer, not "+index.String())
 		return nil
