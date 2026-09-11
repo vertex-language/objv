@@ -291,6 +291,14 @@ func (c *checker) identType(id *ast.Ident) types.Type {
 		return nil
 	}
 	if s := c.lookup(name); s != nil {
+		if s.kind == symEnumConst {
+			// An enumeration constant is a constant expression wherever it
+			// appears (§6.6), and this is the only place that knows which
+			// one this name is. Recording the value is what lets lower emit
+			// it without a second symbol table — the constant has no
+			// storage to look up.
+			c.info.Consts[id] = s.value
+		}
 		return s.typ
 	}
 	// A bare class name in expression position is the class object, which is

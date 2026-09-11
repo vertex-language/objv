@@ -33,6 +33,11 @@ func (u *unit) rvalue(e ast.Expr) ir.Value {
 		return u.stringLit(e)
 
 	case *ast.Ident:
+		// An enumeration constant has no storage: what it is worth is what
+		// the analyzer recorded, and there is nothing to look up.
+		if v, ok := u.info.Consts[e]; ok {
+			return u.constOf(v, t)
+		}
 		return u.identValue(e, t)
 
 	case *ast.UnaryExpr:

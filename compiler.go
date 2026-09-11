@@ -242,10 +242,13 @@ func (c *Compiler) config() (preprocessor.Config, sysroot.Result, error) {
 		for _, d := range sysroot.Predefines(opt, r) {
 			cfg.Predefines = append(cfg.Predefines, preprocessor.Predefine{Text: d})
 		}
-		// ARC is a fact about this compilation that a header may ask about
-		// through __has_feature — which is answered by hasFeature, above,
-		// and cannot see this — so it is also stated as a macro, the way
-		// clang states it.
+		// ARC is a fact about this compilation and not about the target, so
+		// it is applied here rather than in Target.ppConfig: a header asks
+		// through __has_feature(objc_arc), and <objc/objc.h> declares
+		// -retain and -release unavailable when the answer is yes. clang
+		// also states it as a macro, and so does this.
+		cfg.Feature = HasFeatureFunc(c.ARC)
+		cfg.Extension = HasExtensionFunc(c.ARC)
 		if c.ARC {
 			cfg.Predefines = append(cfg.Predefines,
 				preprocessor.Predefine{Text: "__OBJC_ARC__=1"})

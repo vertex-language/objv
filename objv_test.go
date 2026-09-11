@@ -155,14 +155,14 @@ func TestTargetConditionalsAnswers(t *testing.T) {
 		t.Error("__has_builtin(__is_target_os) must be true: TargetConditionals.h " +
 			"decides TARGET_OS_OSX with it")
 	}
-	if objv.HasExtension("define_target_os_macros") {
+	if objv.HasExtension("define_target_os_macros", false) {
 		t.Error("__has_extension(define_target_os_macros) must be false: it means " +
 			"the compiler predefines the TARGET_OS_* macros itself, which objv does not")
 	}
-	if !objv.HasFeature("objc_arc") || !objv.HasFeature("objc_fixed_enum") {
+	if !objv.HasFeature("objc_arc", true) || !objv.HasFeature("objc_fixed_enum", false) {
 		t.Error("the Objective-C features objv implements must answer true")
 	}
-	if objv.HasFeature("cxx_lambdas") {
+	if objv.HasFeature("cxx_lambdas", true) {
 		t.Error("a feature objv does not implement must answer false")
 	}
 	if !objv.HasAttribute("anything_at_all") {

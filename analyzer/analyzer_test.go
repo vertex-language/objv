@@ -549,3 +549,19 @@ func TestAvailabilityClausesAreChecked(t *testing.T) {
 	wantError(t, 0, `int f(void) { if (@available(macOS 1.2.3.4, *)) return 1; return 0; }`,
 		"is not a version")
 }
+
+// §4.4 gives protocols a namespace of their own, which matters because the
+// root class of every Objective-C program is in it twice: `@protocol
+// NSObject` declares -release and -respondsToSelector:, and `@interface
+// NSObject <NSObject>` adopts it. A parser that let the class erase the
+// protocol read the adoption list as a type-parameter list, and the class
+// then declared none of those methods.
+func TestClassAdoptsProtocolOfItsOwnName(t *testing.T) {
+	clean(t, 0, `
+	@protocol Same
+	- (int)fromSame;
+	@end
+	__attribute__((objc_root_class)) @interface Same <Same>
+	@end
+	int f(Same *s) { return [s fromSame]; }`)
+}

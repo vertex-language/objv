@@ -24,9 +24,13 @@ func (u *unit) defineImpl(class, category string, members []ast.Decl) {
 	if k == nil {
 		return
 	}
+	written := map[string]bool{}
 	for _, m := range members {
 		switch m := m.(type) {
 		case *ast.MethodDecl:
+			if !m.IsClassMethod() {
+				written[u.selectorOfDecl(m)] = true
+			}
 			u.defineMethod(k, category, m)
 		case *ast.FuncDecl:
 			u.defineFunc(m)
@@ -35,6 +39,11 @@ func (u *unit) defineImpl(class, category string, members []ast.Decl) {
 		}
 	}
 	if category == "" {
+		// §4.8's default synthesis. The analyzer decided which properties
+		// get storage and declared their accessors; the bodies are owed
+		// here, and a class that does not emit them publishes selectors the
+		// runtime cannot find.
+		u.synthesizeAccessors(k, written)
 		u.impls = append(u.impls, k)
 	} else {
 		u.categories = append(u.categories, categoryImpl{class: k, name: category})

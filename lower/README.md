@@ -179,6 +179,30 @@ with a two-word structure of the receiver and the class the method was
 compiled in, and the runtime finds the superclass itself — which is what lets
 a category attached to the superclass afterwards still be found.
 
+## The accessors nobody wrote
+
+§4.8: a property with neither `@synthesize` nor `@dynamic` still has an
+instance variable and a pair of accessors. The analyzer creates the
+*declarations*, so that a send to one typechecks; this package owes the
+bodies, and a class that does not emit them publishes selectors the runtime
+cannot find — `unrecognized selector`, at run time, for a program the
+compiler accepted.
+
+Most bodies are one load or one store through the ivar's offset. The
+interesting ones are a call, and which call is the whole of what a property's
+attributes mean:
+
+| | |
+| --- | --- |
+| nonatomic, assign | a load and a store through the offset |
+| nonatomic, copy | `objc_setProperty_nonatomic_copy` |
+| atomic, retain | `objc_getProperty`, `objc_setProperty_atomic` |
+
+An atomic *scalar* is stored directly all the same: a word-sized store is
+already indivisible, and clang emits the same thing. Only an object needs the
+runtime, because reading a pointer and retaining it have to happen without a
+setter running in between, and the runtime owns that lock.
+
 ## The sugar that is a send
 
 Three constructs look like C and are messages. All of them go through the same

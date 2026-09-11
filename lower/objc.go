@@ -65,7 +65,8 @@ func (u *unit) message(e *ast.MessageExpr, t types.Type) ir.Value {
 	if m != nil {
 		ret = m.Ret
 	}
-	return u.sendWith(*recv, super, sel, args, params, ret, e)
+	variadic := m != nil && m.Variadic
+	return u.sendWith(*recv, super, sel, args, params, variadic, ret, e)
 }
 
 // send emits one message: the call every Objective-C construct that means a
@@ -78,14 +79,14 @@ func (u *unit) message(e *ast.MessageExpr, t types.Type) ir.Value {
 // link.
 func (u *unit) send(recv ir.Value, super bool, sel string, args []ir.Value,
 	ret types.Type, at ast.Node) ir.Value {
-	return u.sendWith(recv, super, sel, args, nil, ret, at)
+	return u.sendWith(recv, super, sel, args, nil, false, ret, at)
 }
 
 // sendWith is send with the method's declared parameters, which an aggregate
 // argument needs: a struct is a pointer at this level whatever the
 // convention does with it, and only the declaration says which pointer it is.
 func (u *unit) sendWith(recv ir.Value, super bool, sel string, args []ir.Value,
-	params []types.Param, ret types.Type, at ast.Node) ir.Value {
+	params []types.Param, variadic bool, ret types.Type, at ast.Node) ir.Value {
 
 	selp := u.selectorRef(sel)
 	if selp == nil {
@@ -121,8 +122,22 @@ func (u *unit) sendWith(recv ir.Value, super bool, sel string, args []ir.Value,
 	// it was handed, so the call site describes the *method* rather than
 	// the trampoline — which is why the same entry point is imported with
 	// one signature and called with many.
+	// How many of the arguments the *method* declared. Everything past that
+	// is the var-tail, and saying so is not decoration: Apple's AArch64
+	// passes a variadic argument on the stack where a fixed one goes in a
+	// register, so a send to stringWithFormat: described as fixed puts every
+	// format argument where the callee does not look.
+	fixed := len(all)
+	if variadic {
+		fixed = len(all) - (len(args) - len(params))
+	}
+
 	sig := ir.NewSig()
 	for i, a := range all {
+		if i == fixed {
+			sig.Variadic()
+			break
+		}
 		r, ok := u.regOfValue(a)
 		if !ok {
 			u.errorf(at, "internal: %T is not a register value in a send to %s", a, sel)
@@ -191,6 +206,9 @@ func (u *unit) sendType(sig *ir.Sig) *ir.Type { return u.namedFuncType("msgsig",
 // from growing one type declaration per call.
 func (u *unit) namedFuncType(prefix string, sig *ir.Sig) *ir.Type {
 	key := prefix
+	if sig.IsVariadic() {
+		key += "_var"
+	}
 	for _, p := range sig.Params() {
 		key += "_" + p.Type.String()
 		// The attributes are part of the shape, and so is the type each

@@ -67,7 +67,7 @@ func ParseFile(f *token.File, mode Mode) (*ast.File, []token.Diagnostic) {
 	}
 	toks, diags := scanner.Scan(f, sm)
 
-	p := &parser{f: f, mode: mode, diags: diags}
+	p := &parser{f: f, mode: mode, diags: diags, protocolNames: map[string]bool{}}
 	file := &ast.File{Unit: f}
 	file.SetReleaser(&arena{})
 
@@ -127,6 +127,10 @@ type parser struct {
 	depth   int
 
 	scopes []map[string]nameKind
+
+	// protocolNames is the protocol namespace, which is flat and separate
+	// from every other: see declareGlobal.
+	protocolNames map[string]bool
 
 	// classParams remembers each generic class's type parameter names, so
 	// that an @implementation — which §4.1 gives no parameter list of its
@@ -218,9 +222,20 @@ func (p *parser) inClassScope() bool {
 // declaration that mentions them: `@class Forward;` inside an
 // @implementation still names a class for the rest of the unit.
 func (p *parser) declareGlobal(name string, k nameKind) {
-	if name != "" {
-		p.scopes[0][name] = k
+	if name == "" {
+		return
 	}
+	// A protocol name lives in a namespace of its own, and it is flat: §4.4
+	// makes `@protocol NSObject` and `@interface NSObject` two different
+	// things with one name, which is not a corner — it is what the root
+	// class of every Objective-C program is. Keeping protocols in the scope
+	// table would let the class declaration erase the protocol, and then
+	// `@interface NSObject <NSObject>` reads as a type parameter list.
+	if k == nameProtocol {
+		p.protocolNames[name] = true
+		return
+	}
+	p.scopes[0][name] = k
 }
 
 func (p *parser) lookup(name string) nameKind {
@@ -266,7 +281,7 @@ func (p *parser) isTypeName(name string) bool {
 	return false
 }
 
-func (p *parser) isProtocolName(name string) bool { return p.lookup(name) == nameProtocol }
+func (p *parser) isProtocolName(name string) bool { return p.protocolNames[name] }
 func (p *parser) isClassName(name string) bool    { return p.lookup(name) == nameClass }
 
 // ---- token access ----

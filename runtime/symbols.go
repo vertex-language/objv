@@ -225,6 +225,14 @@ const (
 	AutoreleasePoolPush = "objc_autoreleasePoolPush"
 	AutoreleasePoolPop  = "objc_autoreleasePoolPop"
 
+	// GetProperty is what a synthesized getter calls when the property is
+	// atomic: reading a pointer and retaining it have to happen without a
+	// setter running in between, and the runtime owns the lock that makes
+	// that true.
+	//
+	//	id objc_getProperty(id self, SEL _cmd, ptrdiff_t offset, BOOL atomic);
+	GetProperty = "objc_getProperty"
+
 	// Exceptions (§7.2) and synchronization (§7.3).
 	ExceptionThrow   = "objc_exception_throw"
 	ExceptionRethrow = "objc_exception_rethrow"
@@ -257,4 +265,25 @@ func (a ABI) ConstantStringClass() string {
 		return "_NSConstantStringClassReference"
 	}
 	return "__CFConstantStringClassReference"
+}
+
+// SetPropertySymbol is the runtime entry a synthesized setter calls, of which
+// there are four: the two axes are whether the store is atomic and whether
+// the value is copied.
+//
+//	void objc_setProperty_nonatomic_copy(id self, SEL _cmd, id value, ptrdiff_t offset);
+//
+// They are separate symbols rather than one function with two flags because
+// that is what clang calls and what the runtime exports; the generic
+// objc_setProperty exists too and takes the flags, and nothing gains by
+// using it.
+func SetPropertySymbol(atomic, copy bool) string {
+	name := "objc_setProperty_nonatomic"
+	if atomic {
+		name = "objc_setProperty_atomic"
+	}
+	if copy {
+		name += "_copy"
+	}
+	return name
 }

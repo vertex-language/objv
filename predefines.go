@@ -209,21 +209,40 @@ var ldblDefs = map[ldblKind][][2]string{
 // what the compiler says about itself: `objv env` prints them, and a tool
 // driving the front end has to hand the same answers to phase 4 that objv
 // would.
-func HasFeature(name string) bool   { return hasFeature(name) }
-func HasExtension(name string) bool { return hasExtension(name) }
-func HasBuiltin(name string) bool   { return hasBuiltin(name) }
-func HasAttribute(name string) bool { return hasAttribute(name) }
+// HasFeature answers __has_feature. arc says whether this compilation has
+// automatic reference counting on, which three of the answers depend on: ARC
+// is a mode and not a capability, and <objc/objc.h> reads it to decide
+// whether -retain and -release are declared unavailable.
+func HasFeature(name string, arc bool) bool   { return hasFeature(arc)(name) }
+func HasExtension(name string, arc bool) bool { return extensionOn(name, arc) }
+func HasBuiltin(name string) bool             { return hasBuiltin(name) }
+func HasAttribute(name string) bool           { return hasAttribute(name) }
 
 // hasFeature answers __has_feature.
 //
 // Every entry is a language feature objv implements, and the list is short
 // on purpose: a feature claimed and not implemented is worse than one denied,
 // because a header is entitled to be told no and take its fallback.
-func hasFeature(name string) bool {
+// HasFeatureFunc is HasFeature bound to one compilation's ARC mode, which is
+// the shape preprocessor.Config wants.
+func HasFeatureFunc(arc bool) func(string) bool { return hasFeature(arc) }
+
+func hasFeature(arc bool) func(string) bool {
+	return func(name string) bool { return featureOn(name, arc) }
+}
+
+func featureOn(name string, arc bool) bool {
 	switch name {
+	// ARC is a mode, not a capability. A header is entitled to ask whether
+	// it is on and to declare different things either way: <objc/objc.h>
+	// makes -retain and -release unavailable under it, and answering yes
+	// when it is off takes away the two methods manual reference counting
+	// is written in.
+	case "objc_arc", "objc_arc_weak", "objc_arc_fields":
+		return arc
+
 	// The Objective-C surface, §4 through §7.
-	case "objc_arc", "objc_arc_weak", "objc_arc_fields",
-		"objc_instancetype", "objc_generics", "objc_generics_variance",
+	case "objc_instancetype", "objc_generics", "objc_generics_variance",
 		"objc_kindof", "objc_class_property", "objc_subscripting",
 		"objc_array_literals", "objc_dictionary_literals",
 		"objc_boxed_expressions", "objc_boxed_nsvalue_expressions",
@@ -266,12 +285,21 @@ func hasFeature(name string) bool {
 // file then falls through to `#define TARGET_OS_MAC 0` — no error, no
 // warning, and every `#if TARGET_OS_OSX` in Foundation takes the wrong
 // branch. It is on this list explicitly so that nobody adds it.
-func hasExtension(name string) bool {
+func hasExtension(name string) bool { return extensionOn(name, false) }
+
+// HasExtensionFunc is hasExtension bound to one compilation's ARC mode.
+// §6.10's __has_extension answers yes to everything __has_feature does, so
+// it carries the mode for the same three names.
+func HasExtensionFunc(arc bool) func(string) bool {
+	return func(name string) bool { return extensionOn(name, arc) }
+}
+
+func extensionOn(name string, arc bool) bool {
 	switch name {
 	case "define_target_os_macros":
 		return false
 	}
-	return hasFeature(name)
+	return featureOn(name, arc)
 }
 
 // hasBuiltin answers __has_builtin.
@@ -309,7 +337,7 @@ func hasAttribute(name string) bool { return name != "" }
 func (t Target) ppConfig(r sysroot.Result) preprocessor.Config {
 	cfg := preprocessor.Config{
 		Triple:    t.Triple(),
-		Feature:   hasFeature,
+		Feature:   hasFeature(false),
 		Extension: hasExtension,
 		Builtin:   hasBuiltin,
 		Attribute: hasAttribute,

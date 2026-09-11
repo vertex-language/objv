@@ -640,3 +640,36 @@ func TestUnknownTypeName(t *testing.T) {
 		t.Error("the generic list still parses")
 	}
 }
+
+// §4.4 gives protocols a namespace of their own, and the root class of every
+// Objective-C program is where it matters: `@protocol NSObject` and
+// `@interface NSObject` are two things with one name, and the adoption list
+// in `@interface NSObject <NSObject>` is a protocol list rather than the
+// type-parameter list it looks like.
+func TestClassAndProtocolShareAName(t *testing.T) {
+	f, file := clean(t, `
+@protocol Same
+- (int)fromSame;
+@end
+__attribute__((objc_root_class)) @interface Same <Same>
+@end`)
+	var found *ast.ClassInterfaceDecl
+	ast.Inspect(file, func(n ast.Node) bool {
+		if d, ok := n.(*ast.ClassInterfaceDecl); ok {
+			found = d
+		}
+		return true
+	})
+	if found == nil {
+		t.Fatal("no @interface")
+	}
+	if found.TypeParams != nil {
+		t.Error("the adoption list was read as type parameters")
+	}
+	if found.Protocols == nil || len(found.Protocols.Names) != 1 {
+		t.Fatal("the protocol list is missing")
+	}
+	if got := found.Protocols.Names[0].Name(f); got != "Same" {
+		t.Errorf("adopted %q, want Same", got)
+	}
+}

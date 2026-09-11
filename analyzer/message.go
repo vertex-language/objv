@@ -99,6 +99,13 @@ func (c *checker) selectorOf(e *ast.MessageExpr) (string, []types.Type) {
 func (c *checker) resolveSend(e *ast.MessageExpr, recv types.Type, sel string, super bool) *types.Method {
 	o := types.AsObject(recv)
 	if o == nil {
+		if types.AsTypeParam(recv) != nil {
+			// §5.5's type parameter, erased. `[[array firstObject] foo]` on
+			// an unspecialized NSArray sends to ObjectType, which is `id`
+			// by the time there is a value: the runtime resolves it, and so
+			// does this — which is to say, it does not.
+			return nil
+		}
 		if types.IsBlock(recv) {
 			// A block is an object: its first word is an isa, which is why
 			// `[^{ … } copy]` is how a block is moved to the heap without
@@ -144,8 +151,9 @@ func (c *checker) lookupMethod(recv types.Type, sel string, class bool) *types.M
 func (c *checker) unresolvedSend(e *ast.MessageExpr, recv types.Type, sel string) types.Type {
 	o := types.AsObject(recv)
 	switch {
-	case o == nil && types.IsBlock(recv):
-		// A send to a block, which the runtime resolves like any send to id.
+	case o == nil && (types.IsBlock(recv) || types.AsTypeParam(recv) != nil):
+		// A send to a block or to an erased type parameter, which the
+		// runtime resolves like any send to id.
 		return types.ID()
 
 	case o == nil:
