@@ -252,8 +252,13 @@ func (u *unit) constRecord(r *types.Record, c *initCursor) (ir.Init, bool) {
 	}
 	bits := newBitImage(lay)
 	i := 0
-	for !c.done() && i < len(r.Fields) {
+	for !c.done() {
 		it := c.peek()
+		// The bound is checked after the designator, not before it: see
+		// init.go's fillRecord.
+		if _, ok := designator(it); !ok && i >= len(r.Fields) {
+			break
+		}
 		if d, ok := designator(it); ok {
 			fd, isField := d.(*ast.FieldDesignator)
 			if !isField {
@@ -268,10 +273,18 @@ func (u *unit) constRecord(r *types.Record, c *initCursor) (ir.Init, bool) {
 				}
 			}
 			if found < 0 {
-				return ir.Init{}, false
+				// A designator naming no member of *this* record belongs
+				// to an enclosing one: `{ .a = 1, .d.c = 7, .name = "ok" }`
+				// returns to the outer struct after .d.c, and the walk
+				// inside .d has to stop rather than fail. A designator that
+				// names nothing anywhere is the analyzer's to report.
+				break
 			}
 			i = found
 			consumeDesignator(it)
+		}
+		if i >= len(r.Fields) {
+			break
 		}
 		if r.Fields[i].BitField {
 			// A bit-field's constant is packed into the bytes of its

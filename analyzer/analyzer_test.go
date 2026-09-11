@@ -619,3 +619,17 @@ func TestVaListShape(t *testing.T) {
 		t.Errorf("va_list is %v, want an array of three words", got)
 	}
 }
+
+// A misspelled designator writes nothing and leaves the object holding a
+// zero, which compiles and runs. It is a name check and not a placement
+// check: §6.7.9's full constraints want the walk that consumes the
+// initializers, and what a program gets wrong is the name.
+func TestMisspelledDesignator(t *testing.T) {
+	clean(t, 0, `
+	struct Inner { int b, c; };
+	struct Outer { int a; struct Inner d; };
+	struct Outer ok = { .a = 1, .d.c = 7 };`)
+
+	wantError(t, 0, `struct P { int x; }; struct P p = { .nope = 1 };`,
+		"no member named 'nope'")
+}

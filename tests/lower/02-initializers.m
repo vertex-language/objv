@@ -59,3 +59,16 @@ int nested(void) {
     struct Inner local[2] = { { 5, 6 }, { 7, 8 } };
     return local[1].c;
 }
+
+// A designator names where to write, and it may name a member the positional
+// walk has already passed — so the bound is checked after the designator and
+// not before it.
+struct Back { int x, y; };
+struct Back back = { .y = 7, .x = 3 };
+// vir: export global rw @_back @struct_Back
+// vir: = { 3, 7 }
+
+int backLocal(void) {
+    struct Back b = { .y = 7, .x = 3 };
+    return b.x;
+}

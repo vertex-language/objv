@@ -151,6 +151,7 @@ func (c *checker) checkGenDecl(d *ast.GenDecl, external bool) {
 		// and at block scope an initializer need not be constant at all.
 		if id.Init != nil && sym.kind == symObject {
 			c.foldInitializer(id.Init)
+			c.checkDesignators(id.Init, t)
 		}
 	}
 }
@@ -186,6 +187,53 @@ func (c *checker) foldInitializer(e ast.Expr) {
 		}
 		return true
 	})
+}
+
+// checkDesignators reports a `.name` designator that names no member of
+// anything the initialized object contains.
+//
+// It is a name check and not a placement check. §6.7.9's full constraints
+// want the walk that consumes the initializers, and a designator in the
+// wrong place is not caught here — but a misspelled one is, and that is
+// what a program gets wrong. Saying nothing about it means the member is
+// never written and the object quietly holds a zero, which is the failure
+// mode this exists to prevent.
+func (c *checker) checkDesignators(init ast.Expr, t types.Type) {
+	names := map[string]bool{}
+	c.memberNames(t, names, 0)
+	if len(names) == 0 {
+		return
+	}
+	ast.Inspect(init, func(n ast.Node) bool {
+		fd, ok := n.(*ast.FieldDesignator)
+		if !ok || fd.Name == nil {
+			return true
+		}
+		if name := c.name(fd.Name); !names[name] {
+			c.report(fd, "no member named '"+name+"' in "+t.String())
+		}
+		return true
+	})
+}
+
+// memberNames collects every member name an object of this type contains,
+// at any depth. The depth bound is for a type that contains itself through a
+// pointer, which a record may.
+func (c *checker) memberNames(t types.Type, out map[string]bool, depth int) {
+	if depth > 8 {
+		return
+	}
+	switch u := types.Unqualify(t).(type) {
+	case *types.Array:
+		c.memberNames(u.Elem, out, depth+1)
+	case *types.Record:
+		for _, f := range u.Fields {
+			if f.Name != "" {
+				out[f.Name] = true
+			}
+			c.memberNames(f.Type, out, depth+1)
+		}
+	}
 }
 
 func (c *checker) checkStorage(d ast.Node, sp types.Spec, external bool) {

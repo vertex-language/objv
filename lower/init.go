@@ -252,8 +252,15 @@ func (u *unit) fillRecord(addr ir.Ptr, r *types.Record, c *initCursor, at ast.No
 	}
 	b := u.fn.cur
 	i := 0
-	for !c.done() && i < len(r.Fields) {
+	for !c.done() {
 		it := c.peek()
+		// The bound is checked after the designator, not before it: a
+		// designator names where to write, and it may name a member the
+		// positional walk has already passed. `{ .y = 7, .x = 3 }` sets y,
+		// runs off the end, and then goes back for x.
+		if _, ok := designator(it); !ok && i >= len(r.Fields) {
+			return
+		}
 		if d, ok := designator(it); ok {
 			fd, isField := d.(*ast.FieldDesignator)
 			if !isField {
@@ -268,11 +275,17 @@ func (u *unit) fillRecord(addr ir.Ptr, r *types.Record, c *initCursor, at ast.No
 				}
 			}
 			if found < 0 {
-				u.errorf(fd, "no member named %s", name)
+				// A designator naming no member of *this* record belongs
+				// to an enclosing one, and the walk inside a member has to
+				// stop rather than report. One that names nothing anywhere
+				// is the analyzer's to report.
 				return
 			}
 			i = found
 			consumeDesignator(it)
+		}
+		if i >= len(r.Fields) {
+			return
 		}
 		f := r.Fields[i]
 		if f.BitField {
