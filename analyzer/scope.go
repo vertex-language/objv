@@ -58,6 +58,11 @@ type symbol struct {
 	// block marks a variable declared __block: shared with, and mutable
 	// from, the blocks that capture it.
 	block bool
+
+	// static marks a local with static storage duration. It lives where a
+	// global lives and is reached the same way, so a block that names one
+	// does not capture it.
+	static bool
 }
 
 type tagsym struct {
@@ -84,10 +89,83 @@ func (c *checker) fileScope() bool { return len(c.scopes) == 1 }
 func (c *checker) lookup(name string) *symbol {
 	for i := len(c.scopes) - 1; i >= 0; i-- {
 		if s, ok := c.scopes[i].ordinary[name]; ok {
+			c.noteCapture(i, name, s)
 			return s
 		}
 	}
 	return nil
+}
+
+// noteCapture records a name a block literal reached past its own scopes for.
+//
+// Capture analysis belongs here and not in lower because it is a question
+// about scopes, and this is the phase that has them. Whether `n` inside a
+// block body is the enclosing function's `n` or one the block declared for
+// itself is exactly the question C's scoping rules answer, and a later phase
+// re-deriving the answer from the syntax gets `^{ int y = n; int n = 2; }`
+// wrong.
+//
+// The depth the name was found at is what decides it: shallower than the
+// scope the block opened means the name came from outside. File scope is
+// shallower than everything and is not a capture — a global is reached by
+// its symbol, from inside a block exactly as from outside — and so is a
+// static local, which lives where a global lives.
+//
+// Every open block records it, not just the innermost: a block nested in a
+// block reaches the outer function's variable *through* the outer block,
+// which therefore has to capture it too.
+func (c *checker) noteCapture(depth int, name string, s *symbol) {
+	if len(c.blocks) == 0 || depth == 0 {
+		return
+	}
+	// An instance variable inside a block is a reference through self, so
+	// what the block captures is self. §4.5 makes `_count` mean
+	// `self->_count`, and that is as true inside a block as outside it.
+	if s.kind == symIvar {
+		if self := c.lookupSelf(); self != nil {
+			c.noteCapture(self.depth, "self", self.sym)
+		}
+		return
+	}
+	if s.kind != symObject || s.extern || s.static {
+		return
+	}
+	for _, b := range c.blocks {
+		if depth >= b.base || b.seen[name] {
+			continue
+		}
+		b.seen[name] = true
+		c.info.Captures[b.lit] = append(c.info.Captures[b.lit], Capture{
+			Name:  name,
+			Type:  s.typ,
+			Block: s.block,
+		})
+	}
+}
+
+// lookupSelf finds the receiver in scope, and the depth it is at, without
+// going through lookup — which would note it as a capture of its own before
+// noteCapture had decided whether to.
+func (c *checker) lookupSelf() *selfSym {
+	for i := len(c.scopes) - 1; i >= 1; i-- {
+		if s, ok := c.scopes[i].ordinary["self"]; ok {
+			return &selfSym{sym: s, depth: i}
+		}
+	}
+	return nil
+}
+
+type selfSym struct {
+	sym   *symbol
+	depth int
+}
+
+// blockScope is one open block literal: the scope depth its own names start
+// at, and what it has already been recorded as capturing.
+type blockScope struct {
+	lit  *ast.BlockLit
+	base int
+	seen map[string]bool
 }
 
 // declare enters a name in the innermost scope. Same-scope redeclaration is

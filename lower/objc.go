@@ -173,8 +173,11 @@ func (u *unit) recvOf(x ast.Expr) (*ir.Value, bool) {
 			return nil, false
 		}
 		b := u.fn.cur
-		st := b.Ptr.Alloc(uint64(2*u.abi.PtrBytes), uint64(u.abi.PtrBytes))
-		b.Name(st, "super")
+		// The slot is in the entry block, which §19.6 requires and which is
+		// why the entry block is kept open; the stores are here, where the
+		// send is.
+		st := u.fn.entry.Ptr.Alloc(uint64(2*u.abi.PtrBytes), uint64(u.abi.PtrBytes))
+		u.fn.entry.Name(st, "super")
 		b.Ptr.Store(u.fn.self, st)
 		cls := u.superRef(u.fn.class.Name)
 		b.Ptr.Store(cls, b.Ptr.Add(st, b.I64.Const(u.abi.PtrBytes)))

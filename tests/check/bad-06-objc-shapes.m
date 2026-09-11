@@ -29,7 +29,11 @@
 
     void (^blk)(void) = ^{ };
     (*blk)();                        // expect: block pointer cannot be dereferenced
-    [blk ping];                      // expect: a block is not a receiver
+    // A block is an object -- its first word is an isa -- so a send to one
+    // is the send to id, which the runtime resolves and this does not
+    // report. Sending to something that is not an object still is.
+    [blk ping];
+    [n ping];                        // expect: which is not an object pointer
 
     Other *other;
     other->_hidden = 1;              // expect: has no instance variable named '_hidden'

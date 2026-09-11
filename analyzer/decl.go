@@ -86,7 +86,8 @@ func (c *checker) checkGenDecl(d *ast.GenDecl, external bool) {
 		}
 
 		sym := &symbol{typ: t, node: id, block: sp.Block,
-			extern: external || sp.Storage == token.EXTERN}
+			extern: external || sp.Storage == token.EXTERN,
+			static: !external && sp.Storage == token.STATIC}
 		switch {
 		case sp.Storage == token.TYPEDEF:
 			sym.kind = symTypedef

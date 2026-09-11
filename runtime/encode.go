@@ -65,6 +65,25 @@ func (a ABI) EncodeExtended(t types.Type, m types.Model) string {
 // appear in it. Both facts are visible in what clang emits and neither is
 // derivable from the calling convention, so both are stated here.
 func (a ABI) MethodTypes(ret types.Type, params []types.Param, m types.Model) string {
+	// self, then _cmd.
+	return a.signature(ret, []types.Type{types.ID(), types.NewSelector()}, params, m)
+}
+
+// BlockTypes is the same string for a block's invoke function, which the
+// descriptor carries when BlockHasSignature is set.
+//
+// A block has one hidden argument where a method has two, and it is the
+// block itself: `int (^)(int)` encodes as "i12@?0i8" — an int returned, a
+// twelve-byte frame, the block at 0 and the int at 8. The runtime reads it
+// to build an NSMethodSignature, which is how -[NSInvocation invoke] can
+// call a block it was handed.
+func (a ABI) BlockTypes(ret types.Type, params []types.Param, m types.Model) string {
+	return a.signature(ret, []types.Type{&types.Block{}}, params, m)
+}
+
+// signature is the shared shape: the return type, the frame size, and then
+// every argument with the offset it sits at.
+func (a ABI) signature(ret types.Type, hidden []types.Type, params []types.Param, m types.Model) string {
 	var b strings.Builder
 	e := &encoder{abi: a, model: m}
 
@@ -72,9 +91,8 @@ func (a ABI) MethodTypes(ret types.Type, params []types.Param, m types.Model) st
 	frame := &strings.Builder{}
 	off := int64(0)
 
-	// self, then _cmd.
-	for _, hidden := range []types.Type{types.ID(), types.NewSelector()} {
-		frame.WriteString(a.encodeArg(hidden, m, &off))
+	for _, h := range hidden {
+		frame.WriteString(a.encodeArg(h, m, &off))
 	}
 	for _, p := range params {
 		frame.WriteString(a.encodeArg(p.Type, m, &off))

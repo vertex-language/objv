@@ -63,8 +63,14 @@ func (c *checker) expr1(e ast.Expr) types.Type {
 		return c.memberType(e)
 
 	case *ast.IncDecExpr:
+		// §6.5.2.4 and §6.5.3.1 both want a modifiable lvalue, which is the
+		// same requirement an assignment has and is checked the same way:
+		// `x++` is `x = x + 1` in everything but the value it yields.
 		t := c.expr(e.X)
 		c.requireScalar(e, t, e.Op.String())
+		if t != nil {
+			c.checkModifiable(e.X, t)
+		}
 		return t
 
 	case *ast.CompoundLit:
@@ -867,12 +873,45 @@ func (c *checker) assignType(e *ast.AssignExpr) types.Type {
 // checkModifiable reports an assignment to something that cannot be assigned
 // to: a const object, an array, or an object the language declares read-only.
 func (c *checker) checkModifiable(at ast.Node, t types.Type) {
+	if e, ok := at.(ast.Expr); ok && c.checkCaptured(e) {
+		return
+	}
 	switch {
 	case types.QualsOf(t)&types.QConst != 0:
 		c.report(at, "cannot assign to a const "+types.Unqualify(t).String())
 	case types.IsArray(t):
 		c.report(at, "cannot assign to an array")
 	}
+}
+
+// checkCaptured reports an assignment to a variable the enclosing block
+// captured, and says what to do about it.
+//
+// §6.9: a capture is a copy, made where the literal was written and const
+// inside the body. Assigning to one would compile to a store into the block
+// literal that the enclosing function never sees, which is a program that
+// runs and is wrong — the reason the language makes it a constraint
+// violation rather than leaving it to mean something. __block is the way to
+// ask for the variable itself.
+func (c *checker) checkCaptured(e ast.Expr) bool {
+	id, ok := stripParens(e).(*ast.Ident)
+	if !ok || len(c.blocks) == 0 {
+		return false
+	}
+	name := c.name(id)
+	b := c.blocks[len(c.blocks)-1]
+	if !b.seen[name] {
+		return false
+	}
+	for _, cap := range c.info.Captures[b.lit] {
+		if cap.Name != name || cap.Block {
+			continue
+		}
+		c.report(e, "cannot assign to '"+name+
+			"': a block captures a copy; declare it __block to share it")
+		return true
+	}
+	return false
 }
 
 func stripParens(e ast.Expr) ast.Expr {

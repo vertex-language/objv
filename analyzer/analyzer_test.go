@@ -437,3 +437,100 @@ func TestConstantPFolds(t *testing.T) {
 		t.Error("__builtin_constant_p(x) did not fold to 0")
 	}
 }
+
+// ---- what a block captures ----
+
+// Capture analysis is a question about scopes, so it is answered here. A
+// block captures what its body names and its own scopes do not declare.
+func TestBlockCaptures(t *testing.T) {
+	_, file, info := clean(t, 0, `
+	extern int g;
+	int f(int a, int b) {
+		static int s = 0;
+		int local = a;
+		int (^blk)(int) = ^(int p) { return p + local + b + g + s; };
+		return blk(1);
+	}`)
+	got := captureNames(file, info)
+	want := []string{"local", "b"}
+	if len(got) != len(want) {
+		t.Fatalf("captures = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("captures = %v, want %v", got, want)
+			break
+		}
+	}
+}
+
+// §6.9 and C's scoping between them: a name the block declares for itself is
+// the block's, whatever the enclosing function called its variables.
+func TestBlockShadowingIsNotCapture(t *testing.T) {
+	_, file, info := clean(t, 0, `
+	int f(void) {
+		int n = 1;
+		int (^blk)(void) = ^{ int n = 2; return n; };
+		return blk() + n;
+	}`)
+	if got := captureNames(file, info); len(got) != 0 {
+		t.Errorf("captures = %v, want none", got)
+	}
+}
+
+// A block inside a block reaches the function's variable through the outer
+// one, so both capture it.
+func TestNestedBlocksBothCapture(t *testing.T) {
+	_, file, info := clean(t, 0, `
+	typedef int (^I)(void);
+	extern void use(I);
+	void f(int n) {
+		use(^{ use(^{ return n; }); return n; });
+	}`)
+	count := 0
+	ast.Inspect(file, func(x ast.Node) bool {
+		if b, ok := x.(*ast.BlockLit); ok {
+			count++
+			if names := names(info.Captures[b]); len(names) != 1 || names[0] != "n" {
+				t.Errorf("a block captures %v, want [n]", names)
+			}
+		}
+		return true
+	})
+	if count != 2 {
+		t.Fatalf("found %d block literals, want 2", count)
+	}
+}
+
+// An instance variable inside a block is a reference through self, so what
+// the block captures is self.
+func TestIvarInBlockCapturesSelf(t *testing.T) {
+	_, file, info := clean(t, 0, `
+	@interface Box : NSObject { int _n; }
+	@end
+	@implementation Box
+	- (int (^)(void))counter { return ^{ return _n; }; }
+	@end`)
+	if got := captureNames(file, info); len(got) != 1 || got[0] != "self" {
+		t.Errorf("captures = %v, want [self]", got)
+	}
+}
+
+func captureNames(file *ast.File, info *analyzer.Info) []string {
+	var out []string
+	ast.Inspect(file, func(x ast.Node) bool {
+		if b, ok := x.(*ast.BlockLit); ok {
+			out = append(out, names(info.Captures[b])...)
+		}
+		return true
+	})
+	return out
+}
+
+func names(cs []analyzer.Capture) []string {
+	var out []string
+	for _, c := range cs {
+		out = append(out, c.Name)
+	}
+	return out
+}

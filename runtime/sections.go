@@ -49,6 +49,13 @@ const (
 	SecCFString
 	SecCString
 	SecUString
+
+	// A block's descriptor, and the literal of a block that captured
+	// nothing. Both are constant and both hold pointers, so they go where
+	// clang puts them: (__DATA,__const), which the linker moves into
+	// __DATA_CONST when it builds the image. Not __TEXT — a pointer there
+	// could not be relocated.
+	SecBlockConst
 )
 
 // Name is the section a piece of metadata goes in, spelled the way this
@@ -92,6 +99,8 @@ var machoSections = [...]string{
 	SecCFString: "__DATA,__cfstring",
 	SecCString:  "__TEXT,__cstring,cstring_literals",
 	SecUString:  "__TEXT,__ustring",
+
+	SecBlockConst: "__DATA,__const",
 }
 
 // ELF and COFF have no segments and no section attributes, so the names are
@@ -122,4 +131,6 @@ var elfSections = [...]string{
 	SecCFString: ".data",
 	SecCString:  ".rodata",
 	SecUString:  ".rodata",
+
+	SecBlockConst: ".data.rel.ro",
 }

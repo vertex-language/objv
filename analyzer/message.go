@@ -100,7 +100,12 @@ func (c *checker) resolveSend(e *ast.MessageExpr, recv types.Type, sel string, s
 	o := types.AsObject(recv)
 	if o == nil {
 		if types.IsBlock(recv) {
-			c.report(e, "a block is not a receiver; call it instead")
+			// A block is an object: its first word is an isa, which is why
+			// `[^{ … } copy]` is how a block is moved to the heap without
+			// ARC, and why a block can be put in an NSArray. Which class it
+			// is belongs to libSystem and is not in any header, so the send
+			// is the one to an id — resolved by the runtime, unresolvable
+			// here, and typed id.
 			return nil
 		}
 		c.report(e, "receiver is "+recv.String()+", which is not an object pointer")
@@ -139,6 +144,10 @@ func (c *checker) lookupMethod(recv types.Type, sel string, class bool) *types.M
 func (c *checker) unresolvedSend(e *ast.MessageExpr, recv types.Type, sel string) types.Type {
 	o := types.AsObject(recv)
 	switch {
+	case o == nil && types.IsBlock(recv):
+		// A send to a block, which the runtime resolves like any send to id.
+		return types.ID()
+
 	case o == nil:
 		return nil
 
@@ -434,6 +443,10 @@ func (c *checker) blockType(e *ast.BlockLit) types.Type {
 	}
 
 	c.push()
+	// Everything the body looks up from here is either the block's own or a
+	// capture, and the depth this scope sits at is what tells them apart.
+	c.blocks = append(c.blocks, &blockScope{lit: e, base: len(c.scopes) - 1, seen: map[string]bool{}})
+	defer func() { c.blocks = c.blocks[:len(c.blocks)-1] }()
 	for _, p := range e.Params {
 		sp := types.BuildSpecs(c.unit, p.Specs, c)
 		t, id := types.BuildDeclarator(c.unit, sp.Type, p.Decl, true, c)

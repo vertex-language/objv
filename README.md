@@ -107,7 +107,7 @@ export func @Greeter_greet(%self ptr, %_cmd ptr, %name ptr) void nounwind {
 - **Protocols & Typing:** Protocol conformances, optional and required methods, qualified types (`id<NSCopying>`), and lightweight generics (`NSArray<NSString *> *`).
 - **Literals & Subscripting:** Object, array, dictionary, and boxed number literals (`@"string"`, `@[...]`, `@{...}`, `@42`), along with keyed and indexed subscripting (`dict[key]`, `arr[idx]`).
 - **Memory Management:** Automatic Reference Counting (ARC) with retain/release lifecycle synthesis, `@autoreleasepool` blocks, and bridge casts (`__bridge`, `__bridge_transfer`, `__bridge_retained`).
-- **Blocks:** Block literal syntax, capture analysis, closure layout emission, and runtime descriptor setup.
+- **Blocks:** Block literal syntax, capture analysis, closure layout emission, and runtime descriptor setup. A literal that captures nothing is a global block; one that captures is built in the frame, with the copy and dispose helpers a captured object needs.
 - **Control & Exceptions:** Fast enumeration (`for (id item in collection)`), and Objective-C exceptions (`@try`, `@catch`, `@finally`, `@throw`).
 - **Extensions:** GCC and Clang attributes required by standard system headers (`__attribute__((objc_root_class))`, `unavailable`, `deprecated`, nullability annotations).
 

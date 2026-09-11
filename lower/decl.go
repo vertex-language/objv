@@ -427,13 +427,15 @@ func declName(d ast.Declarator) *ast.Ident {
 // bound in the scope — which is why a method does not get a lowering of its
 // own.
 func (u *unit) buildBody(fn *ir.Func, ft *types.Func, names []*ast.Ident,
-	body *ast.CompoundStmt, self *types.Class) {
+	stmts *ast.CompoundStmt, self *types.Class) {
 
 	prev := u.fn
 	u.fn = &fnState{fn: fn, ret: ft.Ret, labels: map[string]*ir.Block{}, class: self}
+	leave := u.enterFunc(fn)
 	u.push()
 	defer func() {
 		u.pop()
+		leave()
 		u.fn = prev
 	}()
 
@@ -449,7 +451,7 @@ func (u *unit) buildBody(fn *ir.Func, ft *types.Func, names []*ast.Ident,
 	for i, p := range ft.Params {
 		r, ok := u.reg(p.Type)
 		if !ok {
-			u.unsupported(body, "a parameter of type "+p.Type.String())
+			u.unsupported(stmts, "a parameter of type "+p.Type.String())
 			return
 		}
 		values = append(values, addParam(fn, r, paramName(i, p)))
@@ -457,14 +459,26 @@ func (u *unit) buildBody(fn *ir.Func, ft *types.Func, names []*ast.Ident,
 	if !types.IsVoid(ft.Ret) {
 		r, ok := u.reg(ft.Ret)
 		if !ok {
-			u.unsupported(body, "a return type of "+ft.Ret.String())
+			u.unsupported(stmts, "a return type of "+ft.Ret.String())
 			return
 		}
 		setReturn(fn, r)
 	}
 
+	// The entry block holds allocations and nothing else, and the body goes
+	// in a block of its own.
+	//
+	// §19.6 admits alloc in the entry block only, and a frame slot is not
+	// always wanted at the top: a local declared after a loop, a block
+	// literal built after one, a fast enumeration's state — each needs a
+	// slot, and by then the entry block would have been terminated by the
+	// loop's first branch. Keeping entry open until the body is finished is
+	// what makes the two rules compatible, and it costs one branch that
+	// every backend folds away.
 	entry := fn.Entry()
-	u.fn.entry, u.fn.cur = entry, entry
+	body := fn.Block("body")
+	u.fn.entry, u.fn.cur = entry, body
+	defer func() { entry.Br(body.To()) }()
 
 	// Each parameter is copied into a slot, because a parameter is an
 	// ordinary local: it may be assigned, addressed, or captured by a
@@ -495,7 +509,7 @@ func (u *unit) buildBody(fn *ir.Func, ft *types.Func, names []*ast.Ident,
 		u.bindIvars(self)
 	}
 
-	u.stmt(body)
+	u.stmt(stmts)
 
 	// A body that fell off the end still needs a terminator. A void
 	// function returns; anything else has already been reported by the

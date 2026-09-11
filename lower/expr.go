@@ -111,8 +111,7 @@ func (u *unit) rvalue(e ast.Expr) ir.Value {
 		return u.dictLit(e, t)
 
 	case *ast.BlockLit:
-		u.unsupported(e, "a block literal")
-		return nil
+		return u.blockLit(e, t)
 
 	case *ast.ProtocolExpr:
 		// @protocol(X) is the address of the protocol object, which this
@@ -996,9 +995,8 @@ func (u *unit) call(e *ast.CallExpr, t types.Type) ir.Value {
 		}
 	}
 	ft := u.typeOf(e.Fun)
-	if types.IsBlock(ft) {
-		u.unsupported(e, "calling a block")
-		return nil
+	if bt, ok := types.Unqualify(ft).(*types.Block); ok {
+		return u.callBlock(e, bt)
 	}
 	fn := types.AsFunc(ft)
 	if fn == nil {

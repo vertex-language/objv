@@ -51,6 +51,29 @@ A class or ivar this unit does *not* implement is imported instead, by the
 same lookup. `Options.SymbolPrefix` is applied on the way out, so a name in
 this package is the C name and a name in the module is the object-file name.
 
+One more thing the first pass decides is *whether to emit at all*. A `static`
+function nothing in the unit mentions cannot be called from anywhere, and a
+C99 inline definition provides no external definition (§6.7.4p7) — so both
+are emitted only where they are used, which `useset.go` computes as a closure
+from the unconditional roots. It is not an optimization: Apple's `<math.h>`
+and `<objc/objc.h>` define inline functions in terms of builtins, and one
+`#import <Foundation/Foundation.h>` brings in dozens. A declaration is not a
+demand either: a prototype whose definition is not emitted gets no import,
+and a declaration this package cannot give a VIR type is remembered and
+reported at the use, if a use comes.
+
+## Where the allocations go
+
+The entry block holds `ptr.alloc` and nothing else, and the body goes in a
+block of its own that entry branches to.
+
+§19.6 admits `alloc` in the entry block only, and a frame slot is not always
+wanted at the top of a function: a local declared after a loop, a block
+literal built after one, a fast enumeration's state. By then the entry block
+would have been terminated by the loop's first branch. Keeping it open until
+the body is finished is what makes the two rules compatible, and it costs one
+branch that every backend folds away.
+
 ## What a method is
 
 A function of `self` and `_cmd`, and nothing else:
@@ -164,6 +187,33 @@ carries the offset `types.Model` computed, plus an explicit tail for the
 padding `sizeof` counts — the layout VIR sees is the layout the analyzer
 measured, not a second opinion arrived at independently.
 
+## Blocks
+
+A block literal becomes three things and sometimes five: a structure built
+where the literal was written, a function holding its body, a descriptor the
+runtime reads, and — when the literal captured something the runtime has to
+keep alive — a copy helper and a dispose helper. `runtime/block.go` has the
+layout, checked against what clang emits.
+
+The structure *is* an object: its first word is an isa, which is why a block
+can be sent `-copy` and put in an `NSArray`. Calling one is
+`b->invoke(b, args…)` — the block passes itself as a hidden first argument,
+and that is the only way the body reaches a capture.
+
+A literal that captured nothing is a **global** block: nothing about it
+differs between two executions of the statement that wrote it, so the whole
+structure is a constant in `(__DATA,__const)` and the expression is its
+address. One that captured something is a **stack** block, built into the
+frame by stores; a program that wants it to outlive the frame says so, with
+`Block_copy` or `-copy`.
+
+Which variables are captured is not decided here. It is a question about C's
+scopes — whether `n` in the body is the enclosing function's or one the block
+declared — so the analyzer answers it, in `analyzer.Info.Captures`, in the
+order the body first named each one, which is the order they are laid out in.
+An instance variable inside a block captures `self`, because §4.5's `_count`
+is `self->_count` there as anywhere else.
+
 ## Initializers
 
 `{ 1, 2, 3 }` and the object it fills are different shapes, and §6.7.9p17 says
@@ -184,7 +234,8 @@ expression:
 
 | | |
 | --- | --- |
-| blocks | a block literal, its captures, and calling one |
+| `__block` variables | a block captures a copy; `__block` shares the variable, through a structure with a reference count of its own that both the function and the block reach it through |
+| a block capturing a struct by value | a memcpy into the literal and one back out |
 | `@try` / `@catch` / `@finally` | needs every call inside the region to become an `invoke` with an unwind edge. `@throw` is lowered; the rest is not |
 | structs by value | a parameter, a return, or a message that returns one. Needs SysV and AAPCS classification, which is a package of its own |
 | bit-fields | reading, writing, and initializing one |

@@ -195,14 +195,13 @@ func TestUnsupportedIsReportedOncePerConstruct(t *testing.T) {
 	_, diags := build(t, `
 __attribute__((objc_root_class)) @interface K @end
 void f(void) {
-    int (^a)(void) = ^{ return 1; };
-    int (^b)(void) = ^{ return 2; };
-    (void)a; (void)b;
+    @try { } @catch (id e) { }
+    @try { } @catch (id e) { }
 }
 `)
 	n := 0
 	for _, d := range diags {
-		if strings.Contains(d.Message, "block literal") {
+		if strings.Contains(d.Message, "@try") {
 			n++
 		}
 	}

@@ -544,3 +544,60 @@ func TestFastEnumerationState(t *testing.T) {
 		}
 	}
 }
+
+// A block's invoke function has one hidden argument where a method has two,
+// and it is the block itself. The string is what clang writes into the
+// descriptor for `int (^)(int)`.
+func TestBlockTypes(t *testing.T) {
+	a := runtime.Darwin64()
+	got := a.BlockTypes(types.Typ(types.Int), []types.Param{{Type: types.Typ(types.Int)}}, types.LP64())
+	if want := "i12@?0i8"; got != want {
+		t.Errorf("BlockTypes = %q, want %q", got, want)
+	}
+	got = a.BlockTypes(types.Typ(types.Void), nil, types.LP64())
+	if want := "v8@?0"; got != want {
+		t.Errorf("BlockTypes of a void block = %q, want %q", got, want)
+	}
+}
+
+// The layouts, against Block-ABI-Apple.txt and against what clang emits: a
+// literal with no captures is 32 bytes, its descriptor 32, and a descriptor
+// carrying the two helpers 48.
+func TestBlockLayouts(t *testing.T) {
+	a := runtime.Darwin64()
+	for _, c := range []struct {
+		name   string
+		fields []runtime.Field
+		want   int64
+	}{
+		{"block_literal", runtime.BlockLiteral, 32},
+		{"block_descriptor", runtime.BlockDescriptor, 32},
+		{"block_descriptor_2", runtime.BlockDescriptorWithHelpers, 48},
+	} {
+		if got := a.SizeOf(c.fields); got != c.want {
+			t.Errorf("sizeof %s = %d, want %d", c.name, got, c.want)
+		}
+	}
+	// invoke is at 16 and the descriptor at 24: a call site loads invoke
+	// from a fixed offset and nothing else about the block matters to it.
+	if off, ok := a.OffsetOf(runtime.BlockLiteral, "invoke"); !ok || off != 16 {
+		t.Errorf("invoke at %d, want 16", off)
+	}
+	if off, ok := a.OffsetOf(runtime.BlockLiteral, "descriptor"); !ok || off != 24 {
+		t.Errorf("descriptor at %d, want 24", off)
+	}
+}
+
+// The flags clang writes: 0x40000000 on a stack block and 0x50000000 on a
+// global one, both read out of an -S listing.
+func TestBlockFlags(t *testing.T) {
+	if got := runtime.BlockHasSignature; got != 0x40000000 {
+		t.Errorf("BlockHasSignature = %#x", uint32(got))
+	}
+	if got := runtime.BlockIsGlobal | runtime.BlockHasSignature; got != 0x50000000 {
+		t.Errorf("global block flags = %#x", uint32(got))
+	}
+	if got := runtime.BlockHasCopyDispose; got != 0x2000000 {
+		t.Errorf("BlockHasCopyDispose = %#x", uint32(got))
+	}
+}

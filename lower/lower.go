@@ -143,6 +143,15 @@ type unit struct {
 	// in the used set.
 	omitted map[string]bool
 
+	// blockBase is the name of the function whose body is being lowered and
+	// blockSeq the block literals seen inside it, which together name every
+	// symbol a literal produces. They belong to the outermost function and
+	// not to the invoke function a nested literal is inside: clang numbers
+	// blocks per function, so a block inside a block is _2 and not
+	// _block_invoke_block_invoke, and a backtrace reads the same either way.
+	blockBase string
+	blockSeq  int
+
 	// undescribed is a file-scope name lower could give no VIR type, and
 	// the reason. Nothing is reported when the declaration is read: a
 	// system header declares far more than any one program uses, and the

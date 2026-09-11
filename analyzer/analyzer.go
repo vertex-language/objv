@@ -67,12 +67,32 @@ type Info struct {
 	// did not write.
 	Props map[*ast.MemberExpr]*types.Property
 
+	// Captures maps each block literal to the variables its body reached
+	// out of its own scopes for, in first-mention order — which is the
+	// order lower lays them out in the block literal, so that the order is
+	// a property of the source and not of a map iteration.
+	Captures map[*ast.BlockLit][]Capture
+
 	// Classes, Protocols and Selectors are what the unit declared and
 	// mentioned, in first-seen order — the order the runtime metadata is
 	// emitted in.
 	Classes   []*types.Class
 	Protocols []*types.Protocol
 	Selectors []string
+}
+
+// Capture is one variable a block literal captured.
+//
+// A block captures by value: the literal holds a copy made where the literal
+// was written, and the body reads that copy. `Block` marks the exception —
+// a variable declared __block is shared rather than copied, and the capture
+// is of a structure the runtime may move to the heap.
+type Capture struct {
+	Name string
+	Type types.Type
+
+	// Block is set for a variable declared __block.
+	Block bool
 }
 
 // Check analyzes one translation unit against a target model.
@@ -90,6 +110,8 @@ func Check(unit *token.File, file *ast.File, model types.Model, mode Mode) (*Inf
 			Enums:  map[*ast.Enumerator]int64{},
 			Sends:  map[*ast.MessageExpr]*types.Method{},
 			Props:  map[*ast.MemberExpr]*types.Property{},
+
+			Captures: map[*ast.BlockLit][]Capture{},
 		},
 		classes:    map[string]*types.Class{},
 		protocols:  map[string]*types.Protocol{},
@@ -148,6 +170,11 @@ type checker struct {
 	// inferred is the return type a block's returns agree on, while fnRet
 	// is nil because the block did not write one (§6.9).
 	inferred types.Type
+
+	// blocks is the block literals whose bodies are open, outermost first.
+	// A name looked up while any of them is open may be a capture; see
+	// noteCapture.
+	blocks []*blockScope
 
 	// self is the class whose method is being checked, and meth the method.
 	// Both are nil in a function. They are what `self`, `super`, an

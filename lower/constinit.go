@@ -31,6 +31,9 @@ func (u *unit) constInit(e ast.Expr, t types.Type) (ir.Init, bool) {
 
 // constScalar folds one initializer that is not a braced list.
 func (u *unit) constScalar(e ast.Expr, t types.Type) (ir.Init, bool) {
+	if b, ok := stripParens(e).(*ast.BlockLit); ok {
+		return u.blockConst(b, u.typeOf(b))
+	}
 	if s, ok := stripParens(e).(*ast.StringLit); ok && !s.Object {
 		if types.IsArray(t) {
 			return u.constStringArray(s, t)
