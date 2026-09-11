@@ -474,6 +474,19 @@ this package does not have and would have to agree with character for
 character to be worth anything, so it is the one place the two compilers
 differ on purpose.
 
+## Inline assembly
+
+The form with no operands, which is what a *header* contains — and a header
+is where a compiler meets inline assembly before it meets a program that
+wants it. `<dispatch/once.h>` is the case: `dispatch_compiler_barrier()` is
+`__asm__ __volatile__("" ::: "memory")`, an empty template that assembles to
+nothing and exists only to stop the optimizer moving a load across it.
+Refusing it means refusing `dispatch_once`.
+
+A statement with an operand needs its constraint mapped onto the target's
+register classes, which is a table this package does not have. It is refused
+by name, and the refusal says which part it could not do.
+
 ## Not yet lowered
 
 Each of these reports once, as an error, naming the construct rather than the
@@ -484,7 +497,7 @@ expression:
 | a struct in a variadic argument | legal C, but there is no declared parameter to hang `byval` on, so nothing states how it travels |
 | a `goto` out of a `@try` that has a `@finally` | the destination table holds any number of exits and a `break` reaches one through it, but a `goto`'s label may not be lowered yet, so how many `@finally` blocks stand between here and it is not known where the `goto` stands |
 | a bit-field instance variable | the runtime writes an ivar's offset in bytes, so packing several into one word means agreeing with clang about which bits each gets — a second layout question with the non-fragile ABI on the other side |
-| inline assembly | `ir` has an asm form; nothing maps constraints onto it yet |
+| an inline assembly operand | `ir` has the asm form and the operand-free statement is lowered; a constraint has to be mapped onto the target's register classes, and that table is not written |
 
 ## Tests
 

@@ -60,8 +60,19 @@ func darwinPredefines(opt Options, r Result) []string {
 		// a header whose method is newer than this simply does not declare
 		// it — which is what makes a deployment target a compile-time
 		// thing rather than a note in the Info.plist.
-		out = append(out, "__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__="+
-			strconv.Itoa(r.Deployment.MacroValue()))
+		//
+		// Both spellings, because AvailabilityInternal.h chooses between
+		// them by asking __has_builtin(__is_target_os): a compiler that has
+		// that builtin is expected to publish the platform-neutral name and
+		// is never asked for the other. objv has the builtin and published
+		// only the other, so __MAC_OS_X_VERSION_MIN_REQUIRED came out as an
+		// undefined identifier — which in a #if is zero, so every
+		// availability comparison in the SDK silently took the branch for
+		// an OS older than anything, and headers declared the wrong things.
+		v := strconv.Itoa(r.Deployment.MacroValue())
+		out = append(out,
+			"__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__="+v,
+			"__ENVIRONMENT_OS_VERSION_MIN_REQUIRED__="+v)
 	}
 	return out
 }

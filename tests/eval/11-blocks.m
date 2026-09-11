@@ -132,3 +132,18 @@ double moved(void) {
 }
 // vir: memcpy
 // vir: %q_byref = ptr.alloc
+
+// A block body sees file scope and its own names, and not the enclosing
+// function's locals — but a `static` local is not a local: §6.2.4 gives it
+// static storage duration, it lives where a global lives, and a block that
+// names one is naming a global. The binding is written inside the function
+// all the same, so it has to come with it.
+int counted(void);
+int counted(void) {
+    static int calls = 0;
+    enum { step = 3 };
+    void (^bump)(void) = ^{ calls += step; };
+    bump();
+    return calls;
+}
+// vir: @_static.calls

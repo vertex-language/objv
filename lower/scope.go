@@ -92,6 +92,37 @@ func (u *unit) bind(name string, s *storage) {
 	}
 }
 
+// globalsVisible collects every name in scope that lives outside the frame:
+// a static local, a file-scope object, a function, an enumeration constant.
+//
+// A block body sees file scope and its own names and not the enclosing
+// function's locals — what it reached for is in its captures. But a `static`
+// local is not a local: §6.2.4 gives it static storage duration, it lives
+// where a global lives, and a block that names one is naming a global. Its
+// *binding*, though, is in the function's scope, because that is where the
+// declaration was written. Dropping the scope drops the binding, and the
+// name then resolves to whatever file scope has under it — which for
+// `static NSMutableArray *log;` is log() from <math.h>, and the program
+// stores an object through a function pointer into the shared cache.
+func (u *unit) globalsVisible() map[string]*storage {
+	out := map[string]*storage{}
+	var walk func(s *scope)
+	walk = func(s *scope) {
+		if s == nil || s == u.top {
+			return
+		}
+		walk(s.parent) // outermost first, so an inner name wins
+		for name, st := range s.names {
+			switch st.kind {
+			case stGlobal, stFunc, stEnum:
+				out[name] = st
+			}
+		}
+	}
+	walk(u.scope)
+	return out
+}
+
 func (u *unit) lookup(name string) *storage {
 	for s := u.scope; s != nil; s = s.parent {
 		if st, ok := s.names[name]; ok {

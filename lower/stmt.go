@@ -117,7 +117,7 @@ func (u *unit) stmt(s ast.Stmt) {
 		u.tryStmt(s)
 
 	case *ast.AsmStmt:
-		u.unsupported(s, "inline assembly")
+		u.asmStmt(s)
 
 	default:
 		u.unsupported(s, "this statement")

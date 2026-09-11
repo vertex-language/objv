@@ -754,10 +754,17 @@ func (c *checker) castType(e *ast.CastExpr) types.Type {
 		c.checkBridgeCast(e, t, src)
 		return t
 	}
-	if src != nil && c.arc() && types.Bridge(t, src) == types.BridgeNeeded {
+	if src != nil && c.arc() && types.Bridge(t, src) == types.BridgeNeeded &&
+		!c.isNullConst(e.X) {
 		// Under ARC a conversion that crosses the boundary has to say what
 		// happens to the ownership of the value, and there are three
 		// answers. Which one is the program's to give.
+		//
+		// The null pointer constant is not one of those conversions: there
+		// is no object, so there is no ownership to describe. `(id)0` is
+		// how a header spells a null object constant — DISPATCH_APPLY_AUTO
+		// is `((dispatch_queue_t)0)` — and demanding a keyword there would
+		// be demanding it of the SDK.
 		c.report(e, "cast between "+src.String()+" and "+t.String()+
 			" requires a bridge cast under ARC: __bridge to transfer nothing, "+
 			"__bridge_retained to hand ownership out, __bridge_transfer to take it in")

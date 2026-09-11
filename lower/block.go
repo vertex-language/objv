@@ -250,8 +250,16 @@ func (u *unit) blockInvoke(e *ast.BlockLit, sig *types.Func, caps []blockCapture
 	// enclosing function's locals: what it reached for is in caps, and
 	// leaving the outer scope visible would let a name resolve to a slot in
 	// a frame this function does not have.
+	//
+	// The names that are not locals come with it, though — a static local
+	// and an enumeration constant are declared inside the function and live
+	// outside the frame. See globalsVisible.
+	outer := u.globalsVisible()
 	u.scope = u.top
 	u.push()
+	for name, st := range outer {
+		u.bind(name, st)
+	}
 	prevName := u.funcNameText
 	// clang's spelling, without the underscores the symbol carries: what
 	// __func__ says inside a block is the invoke function's own name.

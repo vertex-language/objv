@@ -200,14 +200,14 @@ void call(void) { twice(); [K make]; }
 // the construct rather than the expression.
 func TestUnsupportedIsReportedOncePerConstruct(t *testing.T) {
 	_, diags := build(t, `
-void f(void) {
-    __asm__("nop");
-    __asm__("nop");
+void f(int a, int b) {
+    __asm__("add %0, %1, %2" : "=r"(a) : "r"(a), "r"(b));
+    __asm__("add %0, %1, %2" : "=r"(b) : "r"(a), "r"(b));
 }
 `)
 	n := 0
 	for _, d := range diags {
-		if strings.Contains(d.Message, "inline assembly") {
+		if strings.Contains(d.Message, "inline assembly operand") {
 			n++
 		}
 	}
