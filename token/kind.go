@@ -441,6 +441,12 @@ var aliases = map[string]Kind{
 
 	"__typeof__": TYPEOF,
 
+	// gcc accepts __attribute__ with the trailing underscores dropped, and
+	// so the SDK writes it that way where a macro would otherwise have to
+	// care: <NSLayoutAnchor.h> defines its export macro as
+	// `extern __attribute((visibility("default")))`.
+	"__attribute": ATTRIBUTE,
+
 	// gcc's names for _Alignof. Its operand is a type name, as
 	// _Alignof's is.
 	"__alignof":   ALIGNOF,

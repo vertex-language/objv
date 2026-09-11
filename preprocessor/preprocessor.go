@@ -178,7 +178,7 @@ func (p *Preprocessor) run(r *reader) {
 		}
 		if t.Kind == token.HASH && t.StartsLine() {
 			r.next()
-			p.directive(r, t, r.takeLine())
+			p.directive(r, t, r.takeDirectiveLine())
 			continue
 		}
 		if r.skipping() {
@@ -263,6 +263,24 @@ func (r *reader) takeLine() []Token {
 }
 
 func (r *reader) skipLine() { r.takeLine() }
+
+// takeDirectiveLine is the rest of a directive's logical line.
+//
+// The '#' has been consumed, so a token that starts a line is on the *next*
+// one and this directive has no name: §6.10.7's null directive, which does
+// nothing and is legal. It is not a curiosity — <CGPDFArray.h> in the macOS
+// SDK has a line reading `#/* Return the number of items … */`, and the
+// comment is gone by the time phase 4 looks.
+//
+// takeLine cannot answer this on its own: it is also how a skipped text line
+// is consumed, and there the first token does start a line.
+func (r *reader) takeDirectiveLine() []Token {
+	t, ok := r.peek()
+	if !ok || t.Kind == token.EOF || t.StartsLine() {
+		return nil
+	}
+	return r.takeLine()
+}
 
 // wrap lifts scanner output into phase 4's token type.
 func (p *Preprocessor) wrap(toks []token.Token, org *Origin) []Token {

@@ -50,8 +50,17 @@ func (c *checker) evalInt(e ast.Expr) (int64, bool) {
 		return 0, false
 
 	case *ast.Ident:
-		if s := c.lookup(c.name(e)); s != nil && s.kind == symEnumConst {
+		s := c.lookup(c.name(e))
+		switch {
+		case s == nil:
+			return 0, false
+		case s.kind == symEnumConst:
 			return s.value, true
+		case s.hasFolded:
+			// A const integer object whose initializer was a constant.
+			// §6.6 does not admit it; clang folds it, and the SDK is
+			// written expecting that. See symbol.folded.
+			return s.folded, true
 		}
 		return 0, false
 

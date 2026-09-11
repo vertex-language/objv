@@ -716,3 +716,13 @@ func TestEmbeddedFrameworks(t *testing.T) {
 	wantOut(t, cfg2, "#import <Outer/Outer.h>", "outer inner")
 	wantOut(t, cfg2, "#import <Inner/Inner.h>", "toplevel")
 }
+
+// §6.10.7's null directive: a '#' with nothing after it. It is not a
+// curiosity — <CGPDFArray.h> in the macOS SDK has a line reading
+// `#/* Return the number of items in `array'. */`, and the comment is gone
+// by the time phase 4 looks at it.
+func TestNullDirective(t *testing.T) {
+	wantOut(t, Config{}, "#\nx", "x")
+	wantOut(t, Config{}, "#/* nothing here */\nx", "x")
+	wantOut(t, Config{}, "#define A 1\n#\nA", "1")
+}

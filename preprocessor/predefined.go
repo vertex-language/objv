@@ -64,6 +64,14 @@ func (p *Preprocessor) installPredefines() {
 		// than the runtime split: declared properties exist.
 		{"OBJC_NEW_PROPERTIES", "1"},
 
+		// §6.9's blocks. Every SDK header guards its block API with
+		// `#if __BLOCKS__` — <CVDisplayLink.h> declares its handler typedef
+		// under one, <Foundation/NSArray.h> every enumerateUsingBlock: — so
+		// a compiler that implements blocks and does not say so reads a
+		// version of the frameworks with the blocks cut out, and the errors
+		// arrive later, at the uses of types that were never declared.
+		{"__BLOCKS__", "1"},
+
 		// §6.10.8.3's conditional feature macros. Each says objv does not
 		// implement an optional part of C, and each is defined because that
 		// is true today rather than because it is convenient: a program that

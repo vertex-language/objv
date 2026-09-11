@@ -633,3 +633,47 @@ func TestMisspelledDesignator(t *testing.T) {
 	wantError(t, 0, `struct P { int x; }; struct P p = { .nope = 1 };`,
 		"no member named 'nope'")
 }
+
+// §4.2: a class extension or a category redeclares a property to widen it —
+// readonly where everyone can see it, readwrite where the implementation can
+// set it. AppKit does it a dozen times, and reporting it as a duplicate
+// makes the frameworks unreadable.
+func TestCategoryWidensProperty(t *testing.T) {
+	_, _, info := clean(t, 0, `
+	@interface G : NSObject
+	@property (readonly) long state;
+	@end
+	@interface G ()
+	@property long state;
+	@end`)
+	for _, k := range info.Classes {
+		if k.Name != "G" {
+			continue
+		}
+		if n := len(k.Properties); n != 1 {
+			t.Errorf("%d properties, want one", n)
+		}
+		if len(k.Properties) > 0 && k.Properties[0].Has(types.PropReadonly) {
+			t.Error("the redeclaration did not widen the property")
+		}
+		if k.Lookup("setState:", false) == nil {
+			t.Error("the widened property declared no setter")
+		}
+	}
+}
+
+// §6.6 does not make a const object a constant expression — C++ does, and C
+// did not follow — but clang folds one where an integer constant expression
+// is required, and the SDK is written expecting it: <NSWindow.h> declares
+// `static const NSModalResponse NSModalResponseOK = 1;` and <NSPanel.h> uses
+// it as an enumerator's value.
+func TestConstObjectFoldsAsAConstant(t *testing.T) {
+	clean(t, 0, `
+	static const long Base = 1;
+	enum { Derived = Base + 1 };
+	int arr[Base + 3];`)
+
+	// Only const, and only when the initializer folds.
+	wantError(t, 0, `long mutableBase = 1; enum { D = mutableBase };`,
+		"must be an integer constant expression")
+}

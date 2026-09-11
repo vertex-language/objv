@@ -101,7 +101,10 @@ func (c *checker) implement(at ast.Node, k *types.Class, members []ast.Decl, own
 			case *ast.PropertyDecl:
 				// §4.6 admits one in an implementation; it declares a
 				// property whose accessors this class provides.
-				c.addProperties(k, nil, m, owner, false)
+				// A property in an @implementation is another place a
+				// readonly one is widened, so it redeclares like a
+				// category's rather than colliding.
+				c.addProperties(k, nil, m, owner, false, true)
 			default:
 				c.checkDecl(m, false)
 			}

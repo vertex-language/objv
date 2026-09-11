@@ -72,3 +72,13 @@ int backLocal(void) {
     struct Back b = { .y = 7, .x = 3 };
     return b.x;
 }
+
+// A floating constant expression, which is the only kind lower folds itself:
+// the analyzer's evaluator is for the integer ones §6.6 requires somewhere.
+// <NSStatusBar.h> writes `static const CGFloat NSVariableStatusItemLength =
+// -1.0;`, and a compiler that only knows literals cannot initialize it.
+static const double negative = -1.5;
+static const double promoted = 2;
+double both(void) { return negative + promoted; }
+// vir: -1.5
+// vir: 2

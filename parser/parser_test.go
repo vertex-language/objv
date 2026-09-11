@@ -673,3 +673,23 @@ __attribute__((objc_root_class)) @interface Same <Same>
 		t.Errorf("adopted %q, want Same", got)
 	}
 }
+
+// The angle brackets after a class name are a protocol reference list or a
+// type-argument list, and the *shape* decides: a protocol list is bare
+// identifiers and nothing else, so anything with a '*' in it is a
+// specialization whatever the names are called. AppKit has both — a class
+// and a protocol may share a name, and `NSArray<NSMenuItem *>` is still a
+// specialization.
+func TestAngleShapeDecidesBeforeNames(t *testing.T) {
+	_, file := clean(t, `
+@protocol Elem;
+@class Elem;
+@interface NSArray<T> @end
+@interface Holder
+@property (copy) NSArray<Elem *> *items;
+@property (copy) id<Elem> one;
+@end`)
+	if file == nil {
+		t.Fatal("no file")
+	}
+}

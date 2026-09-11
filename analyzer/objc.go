@@ -133,7 +133,7 @@ func (c *checker) checkInterface(d *ast.ClassInterfaceDecl) {
 		if d.Ivars != nil {
 			c.addIvars(k, d.Ivars, types.VisProtected)
 		}
-		c.addMembers(k, nil, d.Members, k.Name)
+		c.addMembers(k, nil, d.Members, k.Name, false)
 	})
 }
 
@@ -187,7 +187,7 @@ func (c *checker) checkCategory(d *ast.CategoryDecl) {
 		owner = k.Name + "(" + c.name(d.Name) + ")"
 	}
 	c.withTypeParams(k, d.TypeParams, func() {
-		c.addMembers(k, nil, d.Members, owner)
+		c.addMembers(k, nil, d.Members, owner, true)
 	})
 }
 
@@ -198,7 +198,7 @@ func (c *checker) checkProtocol(d *ast.ProtocolDecl) {
 		return
 	}
 	p.Complete = true
-	c.addMembers(nil, p, d.Members, p.Name)
+	c.addMembers(nil, p, d.Members, p.Name, false)
 }
 
 // addMembers reads an interface's or protocol's member list. Exactly one of
@@ -207,7 +207,8 @@ func (c *checker) checkProtocol(d *ast.ProtocolDecl) {
 // §4.3's @required and @optional are markers in the list rather than a field
 // on each member, so the state is carried across the walk — which is also
 // how a marker written where §4.3 does not allow one is reported.
-func (c *checker) addMembers(k *types.Class, p *types.Protocol, members []ast.Decl, owner string) {
+func (c *checker) addMembers(k *types.Class, p *types.Protocol, members []ast.Decl,
+	owner string, inCategory bool) {
 	optional := false
 	for _, m := range members {
 		switch m := m.(type) {
@@ -227,7 +228,7 @@ func (c *checker) addMembers(k *types.Class, p *types.Protocol, members []ast.De
 			c.addMethod(k, p, sig, m)
 
 		case *ast.PropertyDecl:
-			c.addProperties(k, p, m, owner, optional)
+			c.addProperties(k, p, m, owner, optional, inCategory)
 
 		default:
 			c.checkDecl(m, false)
@@ -386,7 +387,7 @@ func (c *checker) addIvars(k *types.Class, l *ast.IvarList, def types.Visibility
 
 // addProperties enters the properties of one @property declaration.
 func (c *checker) addProperties(k *types.Class, p *types.Protocol, d *ast.PropertyDecl,
-	owner string, optional bool) {
+	owner string, optional, inCategory bool) {
 
 	attrs, getter, setter := c.propertyAttrs(d)
 	sp := types.BuildSpecs(c.unit, d.Specs, c)
@@ -415,7 +416,20 @@ func (c *checker) addProperties(k *types.Class, p *types.Protocol, d *ast.Proper
 		switch {
 		case k != nil:
 			if prev := findOwnProperty(k, name, attrs&types.PropClass != 0); prev != nil {
-				c.report(decl, "duplicate property '"+name+"' in class '"+k.Name+"'")
+				if !inCategory {
+					c.report(decl, "duplicate property '"+name+"' in class '"+k.Name+"'")
+					continue
+				}
+				// §4.2: a class extension or a category redeclares a
+				// property to widen it — readonly where everyone can see
+				// it, readwrite where the implementation can set it. AppKit
+				// does it a dozen times, `@property(readonly) state` in
+				// NSGestureRecognizer and `@property state` in its
+				// (NSSubclassUse) category. The later declaration stands,
+				// in place, so that everything already pointing at the
+				// property sees it.
+				*prev = *prop
+				c.declareAccessors(k, prev, optional, decl)
 				continue
 			}
 			k.Properties = append(k.Properties, prop)

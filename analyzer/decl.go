@@ -152,6 +152,13 @@ func (c *checker) checkGenDecl(d *ast.GenDecl, external bool) {
 		if id.Init != nil && sym.kind == symObject {
 			c.foldInitializer(id.Init)
 			c.checkDesignators(id.Init, t)
+			// A const integer object initialized by a constant expression
+			// is one everywhere clang is the compiler. See symbol.folded.
+			if types.QualsOf(t)&types.QConst != 0 && types.IsInteger(t) {
+				if v, ok := c.evalInt(id.Init); ok {
+					sym.folded, sym.hasFolded = v, true
+				}
+			}
 		}
 	}
 }

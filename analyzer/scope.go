@@ -63,6 +63,18 @@ type symbol struct {
 	// global lives and is reached the same way, so a block that names one
 	// does not capture it.
 	static bool
+
+	// folded is the value a const-qualified integer object was initialized
+	// with, when that initializer was itself a constant expression.
+	//
+	// §6.6 does not make such a name a constant expression — C++ does, and
+	// C did not follow — but clang folds one where an integer constant
+	// expression is required, and the SDK is written expecting it:
+	// <NSWindow.h> declares `static const NSModalResponse NSModalResponseOK
+	// = 1;` and <NSPanel.h> uses it as an enumerator's value. A compiler
+	// that refuses cannot read AppKit.
+	folded    int64
+	hasFolded bool
 }
 
 type tagsym struct {

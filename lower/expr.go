@@ -197,18 +197,48 @@ func (u *unit) foldInt(e ast.Expr) (int64, bool) {
 	return 0, false
 }
 
-// foldFloat is a floating constant's value.
+// foldFloat is a floating constant expression's value.
+//
+// It is the only floating evaluator the compiler has — the analyzer's folds
+// integers, because those are what §6.6 requires somewhere — so it answers
+// for the shapes a constant initializer is written in rather than for
+// literals alone. `static const CGFloat NSVariableStatusItemLength = -1.0;`
+// in <NSStatusBar.h> is a unary minus applied to one, and a compiler that
+// only knows literals cannot initialize it.
 func (u *unit) foldFloat(e ast.Expr) (float64, bool) {
-	lit, ok := stripParens(e).(*ast.BasicLit)
-	if !ok || lit.Kind != token.FLOAT_LIT {
-		if v, ok := u.foldInt(e); ok {
-			return float64(v), true
+	switch x := stripParens(e).(type) {
+	case *ast.UnaryExpr:
+		v, ok := u.foldFloat(x.X)
+		if !ok {
+			return 0, false
+		}
+		switch x.Op {
+		case token.SUB:
+			return -v, true
+		case token.ADD:
+			return v, true
 		}
 		return 0, false
+
+	case *ast.CastExpr:
+		// A cast to a floating type is the value; to anything else it is a
+		// conversion this does not perform.
+		if types.IsFloat(u.typeOf(x)) {
+			return u.foldFloat(x.X)
+		}
+		return 0, false
+
+	case *ast.BasicLit:
+		if x.Kind == token.FLOAT_LIT {
+			text := string(u.src.Slice(x.Lo, x.Hi))
+			v, _ := analyzer.DecodeFloatConst(text, func(string) {})
+			return v, true
+		}
 	}
-	text := string(u.src.Slice(lit.Lo, lit.Hi))
-	v, _ := analyzer.DecodeFloatConst(text, func(string) {})
-	return v, true
+	if v, ok := u.foldInt(e); ok {
+		return float64(v), true
+	}
+	return 0, false
 }
 
 // constOf builds a constant of the register type t is held in.

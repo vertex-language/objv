@@ -594,17 +594,25 @@ func objectKindOf(name string, k nameKind) (ast.ObjectKind, bool) {
 // name falls back to shape — a protocol list is bare names and commas, and
 // nothing else is.
 func (p *parser) angleIsProtocolList() bool {
-	t := p.peekTok(1)
-	if t.Kind != token.IDENT {
-		return false // `<NSString *>`, `<id<P>>`: a type, whatever it names
+	// Shape first, names second. A protocol reference list is bare
+	// identifiers and nothing else, so anything with a '*' or a nested '<'
+	// in it is a type-argument list whatever the identifiers are called —
+	// and a name may be both. `NSArray<NSMenuItem *>` is a specialization
+	// even where NSMenuItem is also a protocol, because `<NSMenuItem *>` is
+	// not a list a protocol reference could be written as.
+	if !p.angleHoldsOnlyNames() {
+		return false
 	}
-	switch name := p.name(t); {
+	switch name := p.name(p.peekTok(1)); {
 	case p.isProtocolName(name):
 		return true
 	case p.isTypeName(name):
 		return false
 	}
-	return p.angleHoldsOnlyNames()
+	// An undeclared name in a bare list: a protocol reference to something
+	// declared later is far likelier than a specialization on a type that
+	// does not exist.
+	return true
 }
 
 // angleHoldsOnlyNames reports whether the list starting at the cursor's '<'
