@@ -108,8 +108,22 @@ func (u *unit) defineMethod(k *types.Class, category string, m *ast.MethodDecl) 
 	// §ARC ends -dealloc with a call to the superclass's, which the program
 	// may not write and must have: see arcSuperDealloc.
 	u.deallocating = !sig.Class && sig.Sel == "dealloc"
+	u.classMethod = sig.Class
+	u.funcNameText = methodFuncName(k.Name, sig)
 	u.buildBody(fn, ft, names, m.Body, k, runtime.FamilyOf(sig.Sel))
+	u.funcNameText = ""
+	u.classMethod = false
 	u.deallocating = false
+}
+
+// methodFuncName is what __func__ says inside a method: clang's spelling,
+// because a program that prints it is comparing it with something.
+func methodFuncName(owner string, m *types.Method) string {
+	sign := "-"
+	if m.Class {
+		sign = "+"
+	}
+	return sign + "[" + owner + " " + m.Sel + "]"
 }
 
 // methodOf finds the analyzed signature for a definition.

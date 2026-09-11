@@ -286,7 +286,7 @@ func (u *unit) recvOf(x ast.Expr) (*ir.Value, bool) {
 		st := u.fn.entry.Ptr.Alloc(uint64(2*u.abi.PtrBytes), uint64(u.abi.PtrBytes))
 		u.fn.entry.Name(st, "super")
 		b.Ptr.Store(u.fn.self, st)
-		cls := u.superRef(u.fn.class.Name)
+		cls := u.superRef(u.fn.class.Name, u.fn.classMethod)
 		b.Ptr.Store(cls, b.Ptr.Add(st, b.I64.Const(u.abi.PtrBytes)))
 		var v ir.Value = st
 		return &v, true
@@ -403,17 +403,30 @@ func (u *unit) classRef(class string) ir.Ptr {
 	return u.fn.cur.Ptr.Load(u.fn.cur.Ptr.GetAddr(sym))
 }
 
-// superRef loads the class a super send starts its search above.
-func (u *unit) superRef(class string) ir.Ptr {
-	sym, ok := u.superRefs[class]
+// superRef loads the object a super send starts its search above.
+//
+// The class for an instance method and the *metaclass* for a class method,
+// which is not a refinement: objc_msgSendSuper2 takes one step up from what
+// it is given, and a class method's next implementation is on the
+// superclass's metaclass. Handed the class instead, the search starts among
+// the instance methods of the superclass and finds either the wrong method
+// or nothing at all.
+func (u *unit) superRef(class string, meta bool) ir.Ptr {
+	symbol := runtime.ClassSymbol(class)
+	key := class
+	if meta {
+		symbol = runtime.MetaclassSymbol(class)
+		key = "+" + class
+	}
+	sym, ok := u.superRefs[key]
 	if !ok {
 		g := u.mod.Global(u.sym(u.uniq(runtime.SuperRefPrefix)), ir.RW, u.ptrFType()).
 			Internal().
 			Section(u.abi.Name(runtime.SecSuperRefs)).
 			Align(uint64(u.abi.PtrBytes)).
-			Init(ir.RelocInit(u.classSymbol(runtime.ClassSymbol(class))))
+			Init(ir.RelocInit(u.classSymbol(symbol)))
 		sym = g
-		u.superRefs[class] = sym
+		u.superRefs[key] = sym
 	}
 	return u.fn.cur.Ptr.Load(u.fn.cur.Ptr.GetAddr(sym))
 }

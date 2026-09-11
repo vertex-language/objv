@@ -459,6 +459,21 @@ path that unwinds past its scope. The releases are emitted on the paths out
 that lowering can see, and an unwind edge is not one of them — so an exception
 crossing a scope leaks what that scope held.
 
+## __func__
+
+§6.4.2.2's predefined identifier is a *declaration* and not a macro — `static
+const char __func__[] = "name"` at the top of every function body — so it is a
+read-only array like any string literal, and the three spellings gcc gives it
+share one. The name is clang's: `plain` for a function, `-[Class selector]`
+for a method, `main_block_invoke` for a block, because a program that prints
+`__func__` is comparing it with something.
+
+`__PRETTY_FUNCTION__` is that same string here and a rendered signature under
+clang — `void plain(void)`. Spelling a C declaration back out is a printer
+this package does not have and would have to agree with character for
+character to be worth anything, so it is the one place the two compilers
+differ on purpose.
+
 ## Not yet lowered
 
 Each of these reports once, as an error, naming the construct rather than the

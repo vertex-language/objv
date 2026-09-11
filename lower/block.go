@@ -252,7 +252,13 @@ func (u *unit) blockInvoke(e *ast.BlockLit, sig *types.Func, caps []blockCapture
 	// a frame this function does not have.
 	u.scope = u.top
 	u.push()
+	prevName := u.funcNameText
+	// clang's spelling, without the underscores the symbol carries: what
+	// __func__ says inside a block is the invoke function's own name.
+	u.funcNameText = strings.ReplaceAll(blockSym(runtime.BlockInvokeSymbol, name), "__", "")
+	u.bindFuncName()
 	defer func() {
+		u.funcNameText = prevName
 		u.pop()
 		u.fn, u.scope = prevFn, prevScope
 	}()

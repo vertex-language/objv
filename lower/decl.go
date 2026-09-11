@@ -76,6 +76,11 @@ type fnState struct {
 	retainedReturn bool
 	consumesSelf   bool
 
+	// classMethod says this is a + method, which decides what a super send
+	// starts its search above: the metaclass and not the class. See
+	// superRef.
+	classMethod bool
+
 	nblocks int
 }
 
@@ -308,6 +313,31 @@ func (u *unit) declareGlobalVar(name string, t types.Type, sp declSpec, at ast.N
 	_, align := u.sizeAlign(t)
 	g.Align(align)
 	u.top.names[name] = &storage{kind: stGlobal, typ: t, sym: g}
+}
+
+// bindFuncName gives §6.4.2.2's predefined identifier its storage.
+//
+// __func__ is not a macro. It is *declared*, at the top of every function
+// body, as `static const char __func__[] = "name"` — so it is a read-only
+// array like any other string literal, and the three spellings gcc gives it
+// share one. Every logging macro in every project expands to it.
+//
+// __PRETTY_FUNCTION__ is the same string here and a signature under clang.
+// Spelling a C declaration back out is a renderer this package does not have
+// and would have to agree with character for character to be worth anything.
+func (u *unit) bindFuncName() {
+	if u.funcNameText == "" {
+		return
+	}
+	t := types.Qualify(&types.Array{
+		Elem: types.Typ(types.Char),
+		Form: types.FixedArray,
+		Len:  int64(len(u.funcNameText)) + 1,
+	}, types.QConst)
+	sym := u.cstringSym(u.funcNameText)
+	for _, name := range [...]string{"__func__", "__FUNCTION__", "__PRETTY_FUNCTION__"} {
+		u.bind(name, &storage{kind: stGlobal, typ: t, sym: sym})
+	}
 }
 
 // funcFor is the ir.Func a name denotes in this unit, made on first ask.
@@ -563,6 +593,8 @@ func (u *unit) defineFunc(d *ast.FuncDecl) {
 	if u.notEmitted(name, d) {
 		return
 	}
+	u.funcNameText = name
+	defer func() { u.funcNameText = "" }()
 	fn := u.funcFor(name)
 	// An inline definition is emitted internal, not exported. §6.7.4p7 says
 	// it provides no external definition, so the one unit that wrote
@@ -666,6 +698,7 @@ func (u *unit) buildBody(fn *ir.Func, ft *types.Func, names []*ast.Ident,
 
 	prev := u.fn
 	u.fn = &fnState{fn: fn, ret: ft.Ret, labels: map[string]*ir.Block{}, class: self,
+		classMethod: u.classMethod,
 		// What the selector's name promises about what this method returns
 		// and what it does with its receiver. See arc.go.
 		retainedReturn: u.arc && fam.ReturnsRetained(),
@@ -673,6 +706,7 @@ func (u *unit) buildBody(fn *ir.Func, ft *types.Func, names []*ast.Ident,
 	}
 	leave := u.enterFunc(fn)
 	u.push()
+	u.bindFuncName()
 	defer func() {
 		u.pop()
 		leave()

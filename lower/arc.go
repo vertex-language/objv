@@ -395,7 +395,9 @@ func (u *unit) arcSuperDealloc(k *types.Class) {
 	st := u.fn.entry.Ptr.Alloc(uint64(2*u.abi.PtrBytes), uint64(u.abi.PtrBytes))
 	u.fn.entry.Name(st, "super_dealloc")
 	b.Ptr.Store(u.fn.self, st)
-	b.Ptr.Store(u.superRef(k.Name), b.Ptr.Add(st, b.I64.Const(u.abi.PtrBytes)))
+	// -dealloc is an instance method, so the search starts above the
+	// class rather than above the metaclass.
+	b.Ptr.Store(u.superRef(k.Name, false), b.Ptr.Add(st, b.I64.Const(u.abi.PtrBytes)))
 	u.send(st, true, "dealloc", nil, types.Typ(types.Void), nil)
 }
 

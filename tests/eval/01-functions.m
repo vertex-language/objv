@@ -79,3 +79,9 @@ int earlier(int n);
 int earlier(int n) { later(n, n + 1); return n; }
 static void later(int a, int b) { (void)a; (void)b; }
 // vir: call @_later(
+
+// §6.4.2.2's __func__ is a declaration and not a macro: a read-only array at
+// the top of the body, shared by the three spellings gcc gives it.
+const char *whoami(void);
+const char *whoami(void) { return __func__; }
+// vir: "whoami"

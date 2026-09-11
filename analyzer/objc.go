@@ -288,6 +288,17 @@ func methodName(m *types.Method) string {
 	return "-" + m.Sel
 }
 
+// methodFuncName is §6.4.2.2's __func__ inside a method body: clang's
+// spelling, `-[Class selector]`, because a program that prints __func__ is
+// comparing it with something.
+func methodFuncName(owner string, m *types.Method) string {
+	sign := "-"
+	if m.Class {
+		sign = "+"
+	}
+	return sign + "[" + owner + " " + m.Sel + "]"
+}
+
 // methodSig builds a method's signature from its declaration.
 func (c *checker) methodSig(m *ast.MethodDecl, owner string) *types.Method {
 	sig := &types.Method{

@@ -347,7 +347,7 @@ func (c *checker) checkMethodBody(k *types.Class, m *ast.MethodDecl, owner strin
 			c.declare(id, &symbol{kind: symObject, typ: types.AdjustParam(t), node: p})
 		}
 	}
-	c.declareFuncNameText(m, methodName(sig))
+	c.declareFuncNameText(m, methodFuncName(k.Name, sig))
 
 	prevLabels, prevGotos, prevRet := c.labels, c.gotos, c.fnRet
 	c.labels, c.gotos, c.fnRet = map[string]*ast.LabeledStmt{}, nil, sig.Ret

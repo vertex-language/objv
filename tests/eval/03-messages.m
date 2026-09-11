@@ -47,3 +47,24 @@ SEL which(void) { return @selector(add:); }
 
 const char *encoding(void) { return @encode(int); }
 // vir: = "i"
+
+// A super send from a class method starts its search above the *metaclass*.
+// objc_msgSendSuper2 takes one step up from what it is handed, and a class
+// method's next implementation is on the superclass's metaclass — handed the
+// class, the search would start among the superclass's instance methods.
+@interface Base : NSObject
++ (NSString *)tag;
+- (NSString *)name;
+@end
+@implementation Base
++ (NSString *)tag { return @"base"; }
+- (NSString *)name { return @"base"; }
+@end
+@interface Derived : Base
+@end
+@implementation Derived
++ (NSString *)tag { return [super tag]; }
+- (NSString *)name { return [super name]; }
+@end
+// vir: @_OBJC_METACLASS_$_Derived
+// vir: @_OBJC_CLASS_$_Derived

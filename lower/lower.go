@@ -138,6 +138,14 @@ type unit struct {
 	// added before the entry block exists. See funcSignature.
 	sigs map[*ir.Func]funcSig
 
+	// funcNameText is what __func__ says inside the body being built.
+	funcNameText string
+
+	// classMethod is set while a + method's body is being built, so that
+	// the fnState it makes knows which side of the class/metaclass pair a
+	// super send starts above. See superRef.
+	classMethod bool
+
 	// ehTypes are the type-info objects this unit defined, one per class it
 	// implements and something here catches. See try.go.
 	ehTypes map[string]ir.Symbol
