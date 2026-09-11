@@ -43,6 +43,15 @@ func (u *unit) lvalue(e ast.Expr) (*ir.Ptr, types.Type) {
 	case *ast.MemberExpr:
 		return u.memberAddr(e)
 
+	case *ast.CompoundLit:
+		// §6.5.2.5 makes it an lvalue, which is what `&(struct S){1, 2}`
+		// and `(int[]){1, 2, 3}[i]` are about.
+		addr, at, ok := u.compoundAddr(e)
+		if !ok {
+			return nil, nil
+		}
+		return &addr, at
+
 	case *ast.StringLit:
 		v := u.stringLit(e)
 		if p, ok := v.(ir.Ptr); ok {

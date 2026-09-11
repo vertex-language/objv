@@ -37,6 +37,11 @@ func (u *unit) constScalar(e ast.Expr, t types.Type) (ir.Init, bool) {
 	if b, ok := stripParens(e).(*ast.BlockLit); ok {
 		return u.blockConst(b, u.typeOf(b))
 	}
+	if cl, ok := stripParens(e).(*ast.CompoundLit); ok && !isAggregate(t) {
+		// `&(struct S){…}` folds to the address of the object; the address
+		// is taken by constAddress below, which descends to this.
+		return u.compoundConst(cl)
+	}
 	if s, ok := stripParens(e).(*ast.StringLit); ok && !s.Object {
 		if types.IsArray(t) {
 			return u.constStringArray(s, t)
@@ -85,6 +90,8 @@ func (u *unit) constAddress(e ast.Expr) (ir.Init, bool) {
 		}
 	case *ast.CastExpr:
 		return u.constAddress(e.X)
+	case *ast.CompoundLit:
+		return u.compoundConst(e)
 	}
 	return ir.Init{}, false
 }

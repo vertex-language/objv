@@ -55,6 +55,9 @@ func (u *unit) rvalue(e ast.Expr) ir.Value {
 	case *ast.CallExpr:
 		return u.call(e, t)
 
+	case *ast.CompoundLit:
+		return u.compoundLit(e, t)
+
 	case *ast.CastExpr:
 		return u.cast(e, t)
 
