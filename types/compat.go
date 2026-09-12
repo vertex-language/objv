@@ -25,8 +25,12 @@ func IsArithmetic(t Type) bool { return IsInteger(t) || IsFloat(t) }
 
 // IsScalar is §6.2.5p21: an arithmetic type or a pointer. A block pointer is
 // one: it holds an address, it tests against zero, and it is what `if (block)`
-// asks about.
-func IsScalar(t Type) bool { return IsArithmetic(t) || IsPointer(t) || IsBlock(t) }
+// asks about. So is §5.5's type parameter, for the same reason — it is erased
+// to an object pointer, and `if (box.item)` is how a generic class asks
+// whether it holds anything.
+func IsScalar(t Type) bool {
+	return IsArithmetic(t) || IsPointer(t) || IsBlock(t) || AsTypeParam(t) != nil
+}
 
 // IsPointer reports whether t is a pointer type. An array is not one until it
 // has decayed; see Decay.

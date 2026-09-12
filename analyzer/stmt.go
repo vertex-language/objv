@@ -170,7 +170,40 @@ func (c *checker) checkReturn(s *ast.ReturnStmt) {
 		c.report(s, "returning nothing from something that returns "+c.fnRet.String())
 		return
 	}
+	c.checkStackBlockReturn(s.Result)
 	c.checkAssign(s.Result, c.fnRet, got, "returning")
+}
+
+// checkStackBlockReturn is the one thing about blocks that manual retain and
+// release cannot be trusted with.
+//
+// A block literal is an object in the frame that wrote it (§6.9), so
+// returning one hands back an address that stops being a block the moment
+// the function returns. Under ARC the compiler copies it to the heap on the
+// way out and the program is correct; under manual retain and release
+// nothing does, and what the caller gets is whatever the next call writes
+// over that frame. The failure is at the caller, a long way from the return,
+// and the program usually runs for a while first.
+//
+// clang makes this an error rather than a warning, and so does this: the
+// fix is `[^{ … } copy]`, which the program has to write itself.
+func (c *checker) checkStackBlockReturn(e ast.Expr) {
+	if c.arc() || e == nil {
+		return
+	}
+	// Through parentheses and casts, which change nothing about where the
+	// object is. A conditional yielding one on either arm is the same
+	// mistake written twice.
+	switch x := stripParens(e).(type) {
+	case *ast.BlockLit:
+		c.report(x, "returning a block that lives on the local stack; "+
+			"send it -copy, or compile with -fobjc-arc")
+	case *ast.CastExpr:
+		c.checkStackBlockReturn(x.X)
+	case *ast.CondExpr:
+		c.checkStackBlockReturn(x.Then)
+		c.checkStackBlockReturn(x.Else)
+	}
 }
 
 // checkForIn is §7.1's fast enumeration.

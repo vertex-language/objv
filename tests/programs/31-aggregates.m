@@ -75,8 +75,66 @@ static NSString *dig(id node, NSArray *path) {
     return [node description];
 }
 
+// ---- designations, and what they are measured from ----
+
+// §6.7.9p17: every designation is measured from the current object of the
+// brace-enclosed list it stands in, not from wherever the walk happens to
+// be. Both designations here are m's, so the second returns to the top and
+// the 3 and the 4 that follow the first carry on past it -- into the next
+// row, because that is what "the next subobject in order" means. A walk that
+// consumed the second designation inside the row the first one opened wrote
+// the 9 into m[1][0] and left m[0] alone.
+static int gMatrix[2][3] = { [0][1] = 2, 3, 4, [1][2] = 9 };
+
+// And a later designation overrides only what it covers (§6.7.9p19): the 4
+// above stays at m[1][0] with the 9 beside it.
+typedef struct { int x, y; } XY;
+typedef struct { XY a; int x; XY b; } Nested;
+
+// A member name that exists at two levels. `.x` after `.a.x` is the outer
+// one, because the designation starts over from the brace.
+static Nested gNested = { .a.x = 1, .x = 2, .b.y = 3 };
+
+// Positional items, then a designation that jumps back.
+static XY gPoints[3] = { 1, 2, 3, 4, [2].y = 9 };
+
+// Braces of its own, which do own their designations.
+static int gOwn[2][3] = { { [2] = 7 }, { [0] = 1, [1] = 2 } };
+
 int main(void) {
     @autoreleasepool {
+        // The same four, built on the stack rather than in the image: the
+        // local path writes into memory and the static path builds a value,
+        // and they have to agree.
+        int matrix[2][3] = { [0][1] = 2, 3, 4, [1][2] = 9 };
+        Nested nested = { .a.x = 1, .x = 2, .b.y = 3 };
+        XY points[3] = { 1, 2, 3, 4, [2].y = 9 };
+        int own[2][3] = { { [2] = 7 }, { [0] = 1, [1] = 2 } };
+        for (int i = 0; i < 2; i++) {
+            for (int j = 0; j < 3; j++) printf("%d%d", gMatrix[i][j], matrix[i][j]);
+            printf(" ");
+        }
+        printf("\n");
+        printf("%d%d %d%d %d%d %d%d %d%d\n",
+               gNested.a.x, nested.a.x, gNested.a.y, nested.a.y,
+               gNested.x, nested.x, gNested.b.x, nested.b.x,
+               gNested.b.y, nested.b.y);
+        for (int i = 0; i < 3; i++) {
+            printf("%d%d,%d%d ", gPoints[i].x, points[i].x, gPoints[i].y, points[i].y);
+        }
+        printf("\n");
+        for (int i = 0; i < 2; i++) {
+            for (int j = 0; j < 3; j++) printf("%d%d", gOwn[i][j], own[i][j]);
+            printf(" ");
+        }
+        printf("\n");
+
+        // A message send as an initializer item, which is spelled with the
+        // same bracket a designation is and is not one.
+        NSString *made[] = { [@"one" uppercaseString],
+                             [NSString stringWithFormat:@"%d", 2] };
+        printf("%s %s\n", made[0].UTF8String, made[1].UTF8String);
+
         for (size_t i = 0; i < sizeof kDefaults / sizeof kDefaults[0]; i++) {
             show(kDefaults[i]);
         }

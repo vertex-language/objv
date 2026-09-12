@@ -44,7 +44,11 @@ int adds(int n) {
 // A capture the runtime has to keep alive brings the two helpers with it,
 // and BLOCK_HAS_COPY_DISPOSE with them: 0x42000000.
 Action hold(NSString *s) {
-    return ^{ [s length]; };
+    // -copy is what moves it to the heap. A block literal is an object in
+    // this frame (§6.9), so returning one without copying hands back an
+    // address that stops being a block here -- which is an error under
+    // manual retain and release and something ARC does for you.
+    return [^{ [s length]; } copy];
 }
 // vir: internal func @___copy_helper_block_
 // vir: internal func @___destroy_helper_block_

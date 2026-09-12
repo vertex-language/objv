@@ -509,7 +509,7 @@ func TestIvarInBlockCapturesSelf(t *testing.T) {
 	@interface Box : NSObject { int _n; }
 	@end
 	@implementation Box
-	- (int (^)(void))counter { return ^{ return _n; }; }
+	- (int (^)(void))counter { return [^{ return _n; } copy]; }
 	@end`)
 	if got := captureNames(file, info); len(got) != 1 || got[0] != "self" {
 		t.Errorf("captures = %v, want [self]", got)

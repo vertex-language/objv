@@ -27,7 +27,7 @@ func (u *unit) constInit(e ast.Expr, t types.Type) (ir.Init, bool) {
 		// constDescend, not constFill: these are the object's own braces,
 		// already opened, so the items inside belong to its subobjects.
 		// See init.go's descend for what goes wrong otherwise.
-		return u.constDescend(t, c)
+		return u.constDescend(t, c, true, ir.ZeroInit)
 	}
 	return u.constScalar(e, t)
 }
@@ -159,7 +159,7 @@ func (u *unit) padTo(items []ir.Init, n int64) ir.Init {
 
 // constFill is fill's constant twin: it consumes initializers from the
 // cursor and produces the value of one object.
-func (u *unit) constFill(t types.Type, c *initCursor) (ir.Init, bool) {
+func (u *unit) constFill(t types.Type, c *initCursor, owns bool, prior ir.Init) (ir.Init, bool) {
 	if c.done() {
 		return ir.ZeroInit, true
 	}
@@ -184,17 +184,20 @@ func (u *unit) constFill(t types.Type, c *initCursor) (ir.Init, bool) {
 		}
 	}
 
-	return u.constDescend(t, c)
+	return u.constDescend(t, c, owns, prior)
 }
 
 // constDescend builds an object from the initializers that follow, without
 // asking whether the next one's braces are for the object itself.
-func (u *unit) constDescend(t types.Type, c *initCursor) (ir.Init, bool) {
+//
+// owns is init.go's: whether this walk opened the cursor's brace, and so
+// whether a designation it meets is measured from here. See descend there.
+func (u *unit) constDescend(t types.Type, c *initCursor, owns bool, prior ir.Init) (ir.Init, bool) {
 	switch {
 	case types.IsArray(t):
-		return u.constArray(types.AsArray(t), t, c)
+		return u.constArray(types.AsArray(t), t, c, owns, prior)
 	case types.IsRecord(t):
-		return u.constRecord(types.AsRecord(t), c)
+		return u.constRecord(types.AsRecord(t), c, owns, prior)
 	case c.done():
 		return ir.ZeroInit, true
 	}
@@ -212,16 +215,17 @@ func (u *unit) constOne(t types.Type, v ast.Expr) (ir.Init, bool) {
 	return u.constScalar(v, t)
 }
 
-func (u *unit) constArray(a *types.Array, t types.Type, c *initCursor) (ir.Init, bool) {
+func (u *unit) constArray(a *types.Array, t types.Type, c *initCursor, owns bool, prior ir.Init) (ir.Init, bool) {
 	n := u.arrayLen(t, a)
-	items := make([]ir.Init, n)
-	for i := range items {
-		items[i] = ir.ZeroInit
-	}
+	items := priorItems(prior, int(n))
 	idx := int64(0)
+	first := true
 	for !c.done() {
 		it := c.peek()
 		if d, ok := designator(it); ok {
+			if !owns && !first {
+				break // §6.7.9p17: it designates from an enclosing brace
+			}
 			ix, isIndex := d.(*ast.IndexDesignator)
 			if !isIndex {
 				break
@@ -236,26 +240,40 @@ func (u *unit) constArray(a *types.Array, t types.Type, c *initCursor) (ir.Init,
 		if idx >= n {
 			break
 		}
-		v, ok := u.constFill(a.Elem, c)
+		v, ok := u.constFill(a.Elem, c, false, items[idx])
 		if !ok {
 			return ir.Init{}, false
 		}
 		items[idx] = v
 		idx++
+		first = false
 	}
 	return ir.List(items...), true
 }
 
-func (u *unit) constRecord(r *types.Record, c *initCursor) (ir.Init, bool) {
+func (u *unit) constRecord(r *types.Record, c *initCursor, owns bool, prior ir.Init) (ir.Init, bool) {
 	st, ok := u.recordType(r)
 	if !ok {
 		return ir.Init{}, false
 	}
 	// The VIR type may carry a tail field the C record does not, which the
 	// initializer has to account for.
-	items := make([]ir.Init, len(st.Fields()))
-	for i := range items {
-		items[i] = ir.ZeroInit
+	items := priorItems(prior, len(st.Fields()))
+	// A union already built is a *named* field rather than a positional
+	// list -- which member it named is the whole content of a union's
+	// initializer -- so it is put back by name. Without this,
+	// `{ .kind = VPair, .lo = 3, .hi = 4 }` loses the 3: each designation
+	// into the anonymous union starts a fresh walk, and the second one
+	// would start from zero.
+	if prior.Kind() == ir.InitFields {
+		for _, fv := range prior.FieldVals() {
+			for i, f := range st.Fields() {
+				if f.Name == fv.Name {
+					items[i] = fv.Init
+					break
+				}
+			}
+		}
 	}
 	offs, ok := u.model.FieldOffsets(r)
 	if !ok {
@@ -267,6 +285,7 @@ func (u *unit) constRecord(r *types.Record, c *initCursor) (ir.Init, bool) {
 	}
 	bits := newBitImage(lay)
 	i := 0
+	first := true
 	for !c.done() {
 		it := c.peek()
 		// The bound is checked after the designator, not before it: see
@@ -275,6 +294,9 @@ func (u *unit) constRecord(r *types.Record, c *initCursor) (ir.Init, bool) {
 			break
 		}
 		if d, ok := designator(it); ok {
+			if !owns && !first {
+				break // §6.7.9p17: it designates from an enclosing brace
+			}
 			fd, isField := d.(*ast.FieldDesignator)
 			if !isField {
 				break
@@ -293,7 +315,7 @@ func (u *unit) constRecord(r *types.Record, c *initCursor) (ir.Init, bool) {
 				// and the record inside resolves the name. See
 				// init.go's fillRecord, which does the same for a local.
 				if j, ok := anonymousHolding(r, name); ok {
-					v, ok := u.constFill(r.Fields[j].Type, c)
+					v, ok := u.constFill(r.Fields[j].Type, c, false, items[lay.slot[j]])
 					if !ok {
 						return ir.Init{}, false
 					}
@@ -302,6 +324,7 @@ func (u *unit) constRecord(r *types.Record, c *initCursor) (ir.Init, bool) {
 						return ir.Fields(ir.Val(st.Fields()[lay.slot[j]].Name, v)), true
 					}
 					i = j + 1
+					first = false
 					continue
 				}
 				// A designator naming no member of *this* record belongs
@@ -327,9 +350,10 @@ func (u *unit) constRecord(r *types.Record, c *initCursor) (ir.Init, bool) {
 				break
 			}
 			i++
+			first = false
 			continue
 		}
-		v, ok := u.constFill(r.Fields[i].Type, c)
+		v, ok := u.constFill(r.Fields[i].Type, c, false, items[lay.slot[i]])
 		if !ok {
 			return ir.Init{}, false
 		}
@@ -343,9 +367,31 @@ func (u *unit) constRecord(r *types.Record, c *initCursor) (ir.Init, bool) {
 			return ir.Fields(ir.Val(st.Fields()[lay.slot[i]].Name, v)), true
 		}
 		i++
+		first = false
 	}
 	bits.emit(items)
 	return ir.List(items...), true
+}
+
+// priorItems is the n subobject initializers a walk starts from.
+//
+// A designation may name a subobject that a designation before it already
+// wrote part of: §6.7.9p19 says the later one overrides only what it covers,
+// so `static int m[2][3] = { [0][1] = 2, 3, 4, [1][2] = 9 }` leaves the 4 at
+// m[1][0] and puts the 9 beside it. The walk that builds a row therefore
+// starts from the row already built rather than from zero -- which is what
+// the local path gets for free, because it writes into memory and this one
+// builds a value.
+func priorItems(prior ir.Init, n int) []ir.Init {
+	items := make([]ir.Init, n)
+	if prior.Kind() == ir.InitList && len(prior.Elems()) == n {
+		copy(items, prior.Elems())
+		return items
+	}
+	for i := range items {
+		items[i] = ir.ZeroInit
+	}
+	return items
 }
 
 // bitImage is the bytes a record's bit-field constants pack into.

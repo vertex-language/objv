@@ -454,10 +454,15 @@ what they owe out of a frame slot rather than out of the value they were given
 — a pad is reached only by an unwind edge, so the block the lock was taken in
 does not dominate it.
 
-One thing ARC does not yet do in a @try: a `__strong` local is not released on the
-path that unwinds past its scope. The releases are emitted on the paths out
-that lowering can see, and an unwind edge is not one of them — so an exception
-crossing a scope leaks what that scope held.
+Two things ARC does not yet do. In a `@try`, a `__strong` local is not released
+on the path that unwinds past its scope: the releases are emitted on the paths
+out that lowering can see, and an unwind edge is not one of them, so an
+exception crossing a scope leaks what that scope held. And a C aggregate
+holding object pointers — `NSString *names[4]`, or a struct with an object
+member — is not destroyed when its scope ends. Its elements are *initialized*
+with ownership, which is what stops `Describe fns[] = { [^{ … } copy] }` from
+holding a freed block; what is missing is the walk at the other end, which for
+an array is a loop and for a record is a field list.
 
 ## __func__
 

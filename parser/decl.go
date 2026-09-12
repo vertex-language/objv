@@ -1417,7 +1417,7 @@ func (p *parser) parseInitList() *ast.InitList {
 func (p *parser) parseInitItem() *ast.InitItem {
 	lo := p.pos()
 	it := &ast.InitItem{}
-	for p.at(token.LBRACK) || p.at(token.PERIOD) {
+	for p.at(token.PERIOD) || (p.at(token.LBRACK) && p.designatorAhead()) {
 		dlo := p.pos()
 		if p.at(token.LBRACK) {
 			d := &ast.IndexDesignator{Lbrack: p.pos()}
@@ -1440,6 +1440,59 @@ func (p *parser) parseInitItem() *ast.InitItem {
 	it.Value = p.parseInitializer()
 	it.Span = p.span(lo)
 	return it
+}
+
+// designatorAhead reports whether the bracket the parser is looking at opens
+// a designator list rather than a message send.
+//
+// The two are spelled the same way in the one place both may stand:
+//
+//	int a[] = { [2] = 7 };                  a designator
+//	NSString *b[] = { [@"x" uppercaseString] };   a send
+//
+// and reading it as a designator gave "expected ']'" on the selector, which
+// is a syntax error reported at a line with no syntax error in it. §6.7.9
+// says what tells them apart: a designator list ends at an `=`, and nothing
+// else in the grammar of an initializer does. So the whole chain is scanned
+// -- brackets balanced, `.name` steps taken -- and what decides is the token
+// after it. An unbalanced bracket is not a designator either; the expression
+// parser reports it, which is where the error is.
+func (p *parser) designatorAhead() bool {
+	i := p.i
+	seen := false
+	for i < len(p.toks) {
+		switch p.toks[i].Kind {
+		case token.LBRACK:
+			depth := 0
+			for ; i < len(p.toks); i++ {
+				switch p.toks[i].Kind {
+				case token.LBRACK:
+					depth++
+				case token.RBRACK:
+					depth--
+				case token.EOF:
+					return false
+				}
+				if depth == 0 {
+					break
+				}
+			}
+			if i >= len(p.toks) {
+				return false
+			}
+			i++ // past the ]
+			seen = true
+		case token.PERIOD:
+			if i+1 >= len(p.toks) || p.toks[i+1].Kind != token.IDENT {
+				return false
+			}
+			i += 2
+			seen = true
+		default:
+			return seen && p.toks[i].Kind == token.ASSIGN
+		}
+	}
+	return false
 }
 
 // ---- name bookkeeping ----

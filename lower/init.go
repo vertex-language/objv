@@ -30,7 +30,7 @@ func (u *unit) initLocal(addr ir.Ptr, t types.Type, init ast.Expr) {
 		// opened. fill's first question is whether the next item's braces
 		// belong to the object in front of it, and here the answer is no —
 		// they belong to its first subobject.
-		u.descend(addr, t, c, list)
+		u.descend(addr, t, c, list, true)
 		return
 	}
 	u.initScalarOrCopy(addr, t, init)
@@ -48,6 +48,20 @@ func (u *unit) initScalarOrCopy(addr ir.Ptr, t types.Type, init ast.Expr) {
 		if p, ok := u.rvalue(init).(ir.Ptr); ok {
 			u.copyAggregate(addr, p, t)
 		}
+		return
+	}
+	// An object or block subobject takes ownership of what it is given, the
+	// same as a variable of that type does. §ARC: a +1 value stored here is
+	// consumed by the store, and a borrowed one is retained.
+	//
+	// It matters most for the one that is always +1:
+	// `Describe fns[] = { [^{ … } copy] };`. Without this the copy was
+	// stored and then released as a temporary at the end of the
+	// declaration, so the array held an address that had already been
+	// freed -- a use-after-free that reads back fine until something else
+	// takes the memory.
+	if u.arcOn() && objectValued(t) {
+		u.initStrong(addr, t, init)
 		return
 	}
 	v := u.rvalue(init)
@@ -139,7 +153,7 @@ func (c *initCursor) peek() *ast.InitItem {
 // It is §6.7.9's "current object" walk. A scalar takes one initializer; an
 // aggregate takes a braced list whole, or — when the next item is not braced
 // — descends into its subobjects and lets each take what it needs.
-func (u *unit) fill(addr ir.Ptr, t types.Type, c *initCursor, at ast.Node) {
+func (u *unit) fill(addr ir.Ptr, t types.Type, c *initCursor, at ast.Node, owns bool) {
 	if c.done() {
 		return
 	}
@@ -173,23 +187,33 @@ func (u *unit) fill(addr ir.Ptr, t types.Type, c *initCursor, at ast.Node) {
 		}
 	}
 
-	u.descend(addr, t, c, at)
+	u.descend(addr, t, c, at, owns)
 }
 
 // descend writes an object from the initializers that follow, without asking
 // whether the next one's braces are for the object itself.
+//
+// owns says whether this walk is the one that opened the cursor's brace.
+// §6.7.9p17 measures every designation from the current object of the
+// *brace-enclosed* list it stands in, so `int m[2][3] = { [1][2] = 7,
+// [0][0] = 1 }` designates both times from m. A walk that was entered by
+// brace elision, or to place the rest of a designator chain, does not start
+// a designator scope of its own: it takes what is left of the chain it was
+// entered for and hands the next item's designation back up. Consuming it
+// instead wrote the second entry inside the first one's row, and left the
+// row the program named at zero.
 //
 // The distinction is §6.7.9p17's, and it is the whole of how nested braces
 // work. `int m[2][2] = { {1,2}, {3,4} }` opens the array's own braces; the
 // items inside them are for the *elements*, and treating the first as
 // another initializer for the array itself leaves every element after m[0][0]
 // at zero — which compiles, runs, and is wrong.
-func (u *unit) descend(addr ir.Ptr, t types.Type, c *initCursor, at ast.Node) {
+func (u *unit) descend(addr ir.Ptr, t types.Type, c *initCursor, at ast.Node, owns bool) {
 	switch {
 	case types.IsArray(t):
-		u.fillArray(addr, types.AsArray(t), c, at)
+		u.fillArray(addr, types.AsArray(t), c, at, owns)
 	case types.IsRecord(t):
-		u.fillRecord(addr, types.AsRecord(t), c, at)
+		u.fillRecord(addr, types.AsRecord(t), c, at, owns)
 	case c.done():
 	default:
 		// A scalar in its own braces: `int x = { 5 }`.
@@ -204,20 +228,30 @@ func (u *unit) fillOne(addr ir.Ptr, t types.Type, v ast.Expr) {
 	if list, ok := v.(*ast.InitList); ok {
 		u.zeroObject(addr, t)
 		sub := &initCursor{items: list.Items}
-		u.fill(addr, t, sub, list)
+		u.fill(addr, t, sub, list, true)
 		return
 	}
 	u.initScalarOrCopy(addr, t, v)
 }
 
 // fillArray walks an array's elements, honouring [n] designators.
-func (u *unit) fillArray(addr ir.Ptr, a *types.Array, c *initCursor, at ast.Node) {
+func (u *unit) fillArray(addr ir.Ptr, a *types.Array, c *initCursor, at ast.Node, owns bool) {
 	esz, _ := u.sizeAlign(a.Elem)
-	b := u.fn.cur
 	idx := int64(0)
-	for !c.done() {
+	// The block is read at each use and never cached across a fill. An
+	// initializer may hold a call, and inside a @try or an @autoreleasepool
+	// a call is an invoke — a terminator — so the element after it belongs
+	// to the invoke's normal successor and not to the block the walk
+	// started in. Caching the block here appended to one that had already
+	// ended, which the IR builder rejects and which would otherwise be an
+	// element written to a block nothing reaches.
+	first := true
+	for !c.done() && u.at() {
 		it := c.peek()
 		if d, ok := designator(it); ok {
+			if !owns && !first {
+				return // §6.7.9p17: it designates from an enclosing brace
+			}
 			ix, isIndex := d.(*ast.IndexDesignator)
 			if !isIndex {
 				return // a .field designator belongs to an enclosing record
@@ -233,8 +267,10 @@ func (u *unit) fillArray(addr ir.Ptr, a *types.Array, c *initCursor, at ast.Node
 		if a.Form == types.FixedArray && idx >= a.Len {
 			return
 		}
+		b := u.fn.cur
 		elem := b.Ptr.Add(addr, b.I64.Const(idx*int64(esz)))
-		u.fill(elem, a.Elem, c, at)
+		u.fill(elem, a.Elem, c, at, false)
+		first = false
 		// An array whose length the initializer decides has room for
 		// whatever the list holds: the slot was sized from the same
 		// count, so nothing here can overrun it.
@@ -244,15 +280,15 @@ func (u *unit) fillArray(addr ir.Ptr, a *types.Array, c *initCursor, at ast.Node
 
 // fillRecord walks a struct's members, honouring .name designators. A union
 // takes one member: the designated one, or the first.
-func (u *unit) fillRecord(addr ir.Ptr, r *types.Record, c *initCursor, at ast.Node) {
+func (u *unit) fillRecord(addr ir.Ptr, r *types.Record, c *initCursor, at ast.Node, owns bool) {
 	offs, ok := u.model.FieldOffsets(r)
 	if !ok {
 		u.unsupported(at, "an initializer for an incomplete record")
 		return
 	}
-	b := u.fn.cur
 	i := 0
-	for !c.done() {
+	first := true
+	for !c.done() && u.at() {
 		it := c.peek()
 		// The bound is checked after the designator, not before it: a
 		// designator names where to write, and it may name a member the
@@ -262,6 +298,9 @@ func (u *unit) fillRecord(addr ir.Ptr, r *types.Record, c *initCursor, at ast.No
 			return
 		}
 		if d, ok := designator(it); ok {
+			if !owns && !first {
+				return // §6.7.9p17: it designates from an enclosing brace
+			}
 			fd, isField := d.(*ast.FieldDesignator)
 			if !isField {
 				return // an [n] designator belongs to an enclosing array
@@ -283,7 +322,9 @@ func (u *unit) fillRecord(addr ir.Ptr, r *types.Record, c *initCursor, at ast.No
 				// record inside resolves the name itself, which is also
 				// what makes `.a` reach two anonymous levels down.
 				if j, ok := anonymousHolding(r, name); ok {
-					u.fill(b.Ptr.Add(addr, b.I64.Const(offs[j])), r.Fields[j].Type, c, at)
+					b := u.fn.cur
+					u.fill(b.Ptr.Add(addr, b.I64.Const(offs[j])), r.Fields[j].Type, c, at, false)
+					first = false
 					if r.Union {
 						return
 					}
@@ -316,7 +357,9 @@ func (u *unit) fillRecord(addr ir.Ptr, r *types.Record, c *initCursor, at ast.No
 			i++
 			continue
 		}
-		u.fill(b.Ptr.Add(addr, b.I64.Const(offs[i])), f.Type, c, at)
+		b := u.fn.cur
+		u.fill(b.Ptr.Add(addr, b.I64.Const(offs[i])), f.Type, c, at, false)
+		first = false
 		if r.Union {
 			return
 		}
