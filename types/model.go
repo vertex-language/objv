@@ -18,6 +18,13 @@ type Model struct {
 	SizeFloat, SizeDouble, SizeLongDouble      int64
 	AlignLongDouble                            int64
 
+	// MaxVectorAlign is the widest alignment a vector type asks for: the
+	// width of a vector register, because a vector longer than one is held
+	// in several and each of those is what the machine loads. Every target
+	// objv emits for has 16-byte vector registers — NEON's Q and SSE's
+	// XMM — so a simd_float16 is sixty-four bytes aligned to sixteen.
+	MaxVectorAlign int64
+
 	// MSBitfields selects the Microsoft rule for where a bit-field goes.
 	//
 	// §6.7.2.1p11 leaves it implementation-defined, and the two answers in
@@ -74,6 +81,7 @@ func LP64() Model {
 		SizePtr:   8,
 		SizeFloat: 4, SizeDouble: 8, SizeLongDouble: 16,
 		AlignLongDouble: 16,
+		MaxVectorAlign:  16,
 	}
 }
 
@@ -97,6 +105,8 @@ func (m Model) Sizeof(t Type) (int64, bool) {
 		}
 		e, ok := m.Sizeof(t.Elem)
 		return e * t.Len, ok
+	case *Vector:
+		return m.vectorSize(t)
 	case *Record:
 		if !t.Complete {
 			return 0, false
@@ -165,6 +175,20 @@ func (m Model) Alignof(t Type) (int64, bool) {
 		return sz, t.Complete
 	case *Array:
 		return m.Alignof(t.Elem)
+	case *Vector:
+		// A vector aligns to its own size, up to the width of a vector
+		// register: a simd_float2 is eight bytes and aligns to eight, a
+		// simd_float4 is sixteen and aligns to sixteen, and a simd_float16
+		// is sixty-four and still aligns to sixteen, because the machine
+		// loads it in four pieces and each piece is what has to be aligned.
+		sz, ok := m.vectorSize(t)
+		if !ok {
+			return 0, false
+		}
+		if sz > m.MaxVectorAlign {
+			return m.MaxVectorAlign, true
+		}
+		return sz, true
 	case *Record:
 		if !t.Complete {
 			return 0, false
@@ -173,6 +197,26 @@ func (m Model) Alignof(t Type) (int64, bool) {
 		return align, ok
 	}
 	return 0, false
+}
+
+// vectorSize is how much room a vector takes.
+//
+// Not the element count times the element: §clang rounds the count up to a
+// power of two and leaves the count alone, so a three-element vector of
+// floats occupies four of them. A machine has no three-lane register, and a
+// type whose size was twelve would be loaded and stored in pieces that do
+// not exist. `sizeof(simd_float3) == 16` is the rule every simd header is
+// written against.
+func (m Model) vectorSize(t *Vector) (int64, bool) {
+	e, ok := m.Sizeof(t.Elem)
+	if !ok || t.Len <= 0 {
+		return 0, false
+	}
+	n := int64(1)
+	for n < t.Len {
+		n *= 2
+	}
+	return e * n, true
 }
 
 // Offsetof is the byte offset of a member from the base of a record: what

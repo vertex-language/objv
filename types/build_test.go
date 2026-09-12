@@ -265,7 +265,6 @@ func TestBuildReports(t *testing.T) {
 		{"__kindof int notAnObject;", "__kindof requires an Objective-C object type"},
 		{"typedef static int both;", "multiple storage classes"},
 		{"long float wrong;", "invalid type specifier combination"},
-		{"double _Complex unimplemented;", "__STDC_NO_COMPLEX__"},
 	} {
 		_, reports := build(t, c.src)
 		found := false

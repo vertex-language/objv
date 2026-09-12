@@ -290,6 +290,12 @@ func compatUnqual(a, b Type) bool {
 		return x.K == b.(*Basic).K
 	case *Pointer:
 		return Compatible(x.Elem, b.(*Pointer).Elem)
+	case *Vector:
+		// Every declaration of a vector type builds a fresh *Vector, so
+		// identity is no use: the same typedef named twice is two pointers.
+		// Same element type and same count is the whole of it.
+		y := b.(*Vector)
+		return x.Len == y.Len && Compatible(x.Elem, y.Elem)
 	case *Object:
 		return sameObject(x, b.(*Object))
 	case *Block:
@@ -371,6 +377,49 @@ func Assignable(dst, src Type, nullConst bool) AssignKind {
 	switch {
 	case IsArithmetic(l) && IsArithmetic(r):
 		return AssignOK
+
+	// §6.2.5p18 counts the complex types among the arithmetic ones, and
+	// §6.5.16.1p1 lets any arithmetic type assign to any other. They are
+	// kept out of IsArithmetic on purpose — nothing downstream should think
+	// it can convert one — so the rule is written out here, where the
+	// question is only whether a declaration is well formed.
+	// <complex.h> and <tgmath.h> declare a hundred functions between them
+	// and every SceneKit program has both open; declaring one is not using
+	// it, and lower is where a complex *value* is refused.
+	case IsComplex(l) && IsArithmetic(r), IsComplex(r) && IsArithmetic(l),
+		IsComplex(l) && IsComplex(r):
+		return AssignOK
+
+	// Two vectors assign when they are the same shape, and a scalar
+	// assigns to a vector by spreading across its lanes. §clang: the
+	// element types have to agree, because there is no lanewise conversion
+	// on assignment — `simd_float4 f = d;` where d is a simd_double4 is a
+	// mistake, and __builtin_convertvector is what a program writes
+	// instead.
+	case IsVector(l) || IsVector(r):
+		lv, rv := AsVector(l), AsVector(r)
+		switch {
+		case lv != nil && rv != nil:
+			if lv.Len == rv.Len && Compatible(Unqualify(lv.Elem), Unqualify(rv.Elem)) {
+				return AssignOK
+			}
+			// clang's lax vector conversions, which are on by default in C
+			// and off in C++: two *integer* vectors of the same total size
+			// convert into each other without a cast, because what they
+			// hold is the same register either way. <simd/logic.h> is
+			// written on it — `vmaxv_u8(x)` is handed a simd_char8 where
+			// the parameter is a uint8x8_t, and the whole NEON header is
+			// reached that way. Floating vectors are excluded, as in clang:
+			// reinterpreting a float lane as an integer is a change of
+			// meaning and not of spelling.
+			if laxVectorPair(lv, rv) {
+				return AssignOK
+			}
+			return AssignBad
+		case lv != nil && IsArithmetic(r):
+			return AssignOK
+		}
+		return AssignBad
 
 	case IsRecord(l):
 		if CompatibleIgnoringQuals(l, r) {
@@ -707,4 +756,17 @@ func Bridge(dst, src Type) BridgeKind {
 		return BridgeNeeded
 	}
 	return BridgeNone
+}
+
+// laxVectorPair reports whether two vectors convert into each other under
+// clang's -flax-vector-conversions=integer, which is the default in C: both
+// integral, and the same number of bytes in total.
+func laxVectorPair(a, b *Vector) bool {
+	if !IsInteger(a.Elem) || !IsInteger(b.Elem) {
+		return false
+	}
+	m := LP64()
+	sa, oka := m.Sizeof(a)
+	sb, okb := m.Sizeof(b)
+	return oka && okb && sa == sb
 }

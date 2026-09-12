@@ -172,6 +172,27 @@ func digitVal(c byte) int {
 // and type.
 func DecodeFloatConst(text string, report func(string)) (float64, types.Type) {
 	t := types.Typ(types.Double)
+	// The width-named suffixes first: they begin with the same letter the
+	// old one-character suffix does, so `0x1.ffcp-1f16` read right to left
+	// is a float named 16 rather than a float. C23 §6.4.4.2 spells them
+	// f16/f32/f64/f128, and <simd/common.h> writes one on every line that
+	// mentions a half — the type has to be named, because the value is not
+	// representable in anything narrower and rounding it twice is not the
+	// same as rounding it once.
+	for _, sfx := range []struct {
+		text string
+		kind types.Kind
+	}{
+		{"f16", types.Float16},
+		{"f32", types.Float},
+		{"f64", types.Double},
+		{"f128", types.LongDouble},
+	} {
+		if n := len(sfx.text); len(text) > n && strings.EqualFold(text[len(text)-n:], sfx.text) {
+			t, text = types.Typ(sfx.kind), text[:len(text)-n]
+			return finishFloat(text, t, report)
+		}
+	}
 	if len(text) > 0 {
 		switch text[len(text)-1] {
 		case 'f', 'F':
@@ -180,6 +201,11 @@ func DecodeFloatConst(text string, report func(string)) (float64, types.Type) {
 			t, text = types.Typ(types.LongDouble), text[:len(text)-1]
 		}
 	}
+	return finishFloat(text, t, report)
+}
+
+// finishFloat parses what is left once the suffix has been taken off.
+func finishFloat(text string, t types.Type, report func(string)) (float64, types.Type) {
 	v, err := strconv.ParseFloat(text, 64) // handles 0x1.8p3
 	if err != nil {
 		if ne, ok := err.(*strconv.NumError); ok && ne.Err == strconv.ErrRange {

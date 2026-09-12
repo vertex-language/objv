@@ -86,8 +86,9 @@ func (c *checker) checkGenDecl(d *ast.GenDecl, external bool) {
 		}
 
 		sym := &symbol{typ: t, node: id, block: sp.Block,
-			extern: external || sp.Storage == token.EXTERN,
-			static: !external && sp.Storage == token.STATIC}
+			extern:       external || sp.Storage == token.EXTERN,
+			static:       !external && sp.Storage == token.STATIC,
+			overloadable: c.hasAttr(sp.Attrs, "overloadable") || c.hasAttr(id.Attrs, "overloadable")}
 		switch {
 		case sp.Storage == token.TYPEDEF:
 			sym.kind = symTypedef
@@ -674,7 +675,9 @@ func (c *checker) checkFuncDecl(fn *ast.FuncDecl) {
 		return
 	}
 	if name != nil {
-		c.declare(name, &symbol{kind: symFunc, typ: t, node: fn, extern: true})
+		c.declare(name, &symbol{kind: symFunc, typ: t, node: fn, extern: true,
+			overloadable: c.hasAttr(sp.Attrs, "overloadable") ||
+				c.hasAttr(fn.Attrs, "overloadable")})
 	}
 
 	c.push()

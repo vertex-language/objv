@@ -416,6 +416,14 @@ func (c *checker) indexType(e *ast.IndexExpr) types.Type {
 	if o := types.AsObject(x); o != nil {
 		return c.subscriptSend(e, x, i, false)
 	}
+	// A vector is subscripted like an array and is not one: it has no
+	// address per lane, so this is a lane read rather than a dereference.
+	if v := types.AsVector(x); v != nil {
+		if i != nil && !types.IsInteger(i) {
+			c.report(e, "vector subscript is "+i.String()+", which is not an integer type")
+		}
+		return types.Qualify(v.Elem, types.QualsOf(x))
+	}
 	switch {
 	case x != nil && types.IsPointer(x):
 		if i != nil && !types.IsInteger(i) {
@@ -488,6 +496,35 @@ func (c *checker) subscriptSend(e *ast.IndexExpr, recv, index types.Type, assign
 // callType checks C11 §6.5.2.2, and calling a block, which is the same
 // production and a different thing.
 func (c *checker) callType(e *ast.CallExpr) types.Type {
+	// The two builtins that are not functions: their result's shape comes
+	// from the arguments, so there is nothing for the callee to be typed
+	// as. Answered before the callee is looked up at all, or looking it up
+	// would report a builtin objv does not implement. See vector.go.
+	if isVectorBuiltin(c, e) {
+		args := make([]types.Type, len(e.Args))
+		for i, a := range e.Args {
+			args[i] = c.rvalue(a)
+		}
+		t, _ := c.vectorBuiltin(e, args)
+		return t
+	}
+	// An overloaded name has no type of its own: which declaration it means
+	// is decided by the arguments, so they are typed first. See overload.go.
+	if set := c.overloadSet(e.Fun); set != nil {
+		args := make([]types.Type, len(e.Args))
+		for i, a := range e.Args {
+			args[i] = c.rvalue(a)
+		}
+		fnT := c.resolveOverload(e, set, args)
+		if fnT == nil {
+			return nil
+		}
+		ft := types.AsFunc(types.Unqualify(fnT))
+		if ft == nil {
+			return nil
+		}
+		return c.checkArgs(e, ft, args, "function")
+	}
 	fnT := c.rvalue(e.Fun)
 	// The one call whose value is known here. Recorded so that lower emits
 	// the answer rather than its own conservative one, and so that a header
@@ -586,6 +623,15 @@ func (c *checker) memberType(e *ast.MemberExpr) types.Type {
 	// type itself rather than another pointer to one.
 	if o, ok := types.Unqualify(base).(*types.Object); ok {
 		return c.ivarAccess(e, o, name)
+	}
+	// A vector's lanes are named, and a run of the names is a swizzle. See
+	// vector.go: this is the one member syntax that is not a member.
+	if v := types.AsVector(base); v != nil {
+		if t, isLane := c.vectorMember(e.Sel, v, base, name); isLane {
+			return t
+		}
+		c.report(e.Sel, "'"+name+"' is not a lane of "+base.String())
+		return nil
 	}
 	rec := types.AsRecord(base)
 	if rec == nil {
@@ -730,6 +776,10 @@ func (c *checker) unaryType(e *ast.UnaryExpr) types.Type {
 
 	case token.NOT:
 		t := c.rvalue(e.X)
+		if v := types.AsVector(t); v != nil {
+			// Elementwise, into the mask a comparison would have produced.
+			return &types.Vector{Elem: c.vectorMaskElem(v.Elem), Len: v.Len}
+		}
 		c.requireScalar(e, t, "!")
 		return types.Typ(types.Int)
 
@@ -737,6 +787,12 @@ func (c *checker) unaryType(e *ast.UnaryExpr) types.Type {
 		t := c.rvalue(e.X)
 		if t == nil {
 			return nil
+		}
+		// Elementwise, and no promotion: a vector of shorts negates into a
+		// vector of shorts. The usual arithmetic conversions are about
+		// registers a scalar is held in and say nothing about lanes.
+		if types.IsVector(t) {
+			return types.Unqualify(t)
 		}
 		if !types.IsArithmetic(t) {
 			c.report(e, "invalid operand to unary '"+e.Op.String()+"': "+t.String())
@@ -748,6 +804,13 @@ func (c *checker) unaryType(e *ast.UnaryExpr) types.Type {
 		t := c.rvalue(e.X)
 		if t == nil {
 			return nil
+		}
+		if v := types.AsVector(t); v != nil {
+			if !types.IsInteger(v.Elem) {
+				c.report(e, "invalid operand to '~': "+t.String())
+				return nil
+			}
+			return types.Unqualify(t)
 		}
 		if !types.IsInteger(t) {
 			c.report(e, "invalid operand to '~': "+t.String())
@@ -799,6 +862,45 @@ func (c *checker) binaryType(e *ast.BinaryExpr) types.Type {
 	}
 	if x == nil || y == nil {
 		return nil
+	}
+
+	// Elementwise, when either side is a vector. Every operator below means
+	// the same thing per lane that it means for a scalar, and a scalar
+	// operand is spread across the lanes first — which is what lets
+	// <simd/common.h> write `x * 0.5f` where x is a simd_float4. See
+	// vector.go.
+	if types.IsVector(x) || types.IsVector(y) {
+		switch e.Op {
+		case token.EQL, token.NEQ, token.LSS, token.GTR, token.LEQ, token.GEQ:
+			if t, ok := c.vectorBinary(e, e.Op.String(), x, y, true); ok {
+				return t
+			}
+		case token.LAND, token.LOR:
+			// Elementwise, and the one place && does not sequence: there is
+			// no single truth to short-circuit on, so both sides are
+			// evaluated and every lane is combined. clang allows it and
+			// <simd/math.h> relies on it —
+			//
+			//	return x == x && __tg_fabs(x) != (simd_half2)INFINITY;
+			//
+			// is how it asks, lane by lane, whether a value is finite.
+			if t, ok := c.vectorBinary(e, e.Op.String(), x, y, true); ok {
+				return t
+			}
+		case token.ADD, token.SUB, token.MUL, token.QUO, token.REM,
+			token.AND, token.OR, token.XOR, token.SHL, token.SHR:
+			if t, ok := c.vectorBinary(e, e.Op.String(), x, y, false); ok {
+				if v := types.AsVector(t); v != nil && !types.IsInteger(v.Elem) {
+					switch e.Op {
+					case token.REM, token.AND, token.OR, token.XOR, token.SHL, token.SHR:
+						c.report(e, "invalid operands to '"+e.Op.String()+"': "+
+							x.String()+" and "+y.String())
+						return nil
+					}
+				}
+				return t
+			}
+		}
 	}
 
 	switch e.Op {
@@ -875,6 +977,15 @@ func (c *checker) condType(e *ast.CondExpr) types.Type {
 		return nil
 	}
 	switch {
+	// Two vectors of the same shape, or a vector and a scalar to spread
+	// across it. §clang: the condition is a scalar and the arms are chosen
+	// whole — this is not a lanewise select, which is what simd_bitselect
+	// is for.
+	case types.IsVector(t) || types.IsVector(f):
+		if r, ok := c.vectorBinary(e, "?:", t, f, false); ok {
+			return r
+		}
+		return nil
 	case types.IsArithmetic(t) && types.IsArithmetic(f):
 		return c.model.Usual(t, f)
 	case types.IsVoid(t) && types.IsVoid(f):
@@ -978,6 +1089,18 @@ func (c *checker) assignType(e *ast.AssignExpr) types.Type {
 	}
 	// A compound assignment is the binary operator followed by a simple
 	// assignment, and its operands obey the operator's rules.
+	//
+	// A vector obeys the vector rules: `__x.columns[0] *= __a` scales every
+	// lane by a scalar, which is how <simd/matrix.h> writes matrix_scale.
+	// The result stays the left operand's type — a compound assignment
+	// converts back to it — so what is checked here is only that the
+	// operator applies.
+	if types.IsVector(lhs) {
+		if rhs != nil {
+			c.vectorBinary(e, e.Op.String(), lhs, rhs, false)
+		}
+		return types.Unqualify(lhs)
+	}
 	if rhs != nil && !types.IsScalar(lhs) {
 		c.report(e, "invalid operand to '"+e.Op.String()+"': "+lhs.String())
 	}

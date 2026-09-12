@@ -1195,6 +1195,14 @@ func (u *unit) call(e *ast.CallExpr, t types.Type) ir.Value {
 	if fn == nil {
 		return nil
 	}
+	// A call to a signature this package could not build is not a call it
+	// can make. The refusal has already been reported at the definition;
+	// emitting the call anyway reaches the IR builder with more arguments
+	// than the function has parameters, and what surfaces is an arity
+	// mismatch on a line in <arm/_types.h>.
+	if !u.signatureLowerable(fn, e) {
+		return nil
+	}
 
 	// The storage an aggregate result is written into, which is also the
 	// value of the call: an aggregate is held by address in this package,
@@ -1249,7 +1257,7 @@ func (u *unit) call(e *ast.CallExpr, t types.Type) ir.Value {
 	// A direct call to a name reaches its symbol; anything else is a call
 	// through a pointer, which the IR wants a type for.
 	if id, ok := stripParens(e.Fun).(*ast.Ident); ok {
-		if st := u.lookup(u.name(id)); st != nil && st.kind == stFunc {
+		if st := u.lookup(u.callLinkName(id)); st != nil && st.kind == stFunc {
 			if callee, ok := u.symOf(st).(ir.Callee); ok {
 				res := u.callMaybeUnwind(callee, args...)
 				u.applyWritebacks(wbs)

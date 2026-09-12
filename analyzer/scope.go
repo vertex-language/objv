@@ -64,6 +64,13 @@ type symbol struct {
 	// does not capture it.
 	static bool
 
+	// overloadable marks a function declared
+	// __attribute__((overloadable)), and overloads holds every declaration
+	// of the name including this one, in source order. The symbol in the
+	// scope is the first; see overload.go.
+	overloadable bool
+	overloads    []*symbol
+
 	// builtin marks one of the Objective-C names this compiler knows
 	// before any header does. A typedef read from a header replaces it;
 	// nothing else may.
@@ -204,6 +211,35 @@ func (c *checker) declare(id *ast.Ident, s *symbol) {
 			// for what <objc/objc.h> declares, so that a fragment read with
 			// no headers still typechecks. The header's declaration is the
 			// real one and replaces them.
+		case prev.kind == symFunc && s.kind == symFunc &&
+			(prev.overloadable || s.overloadable):
+			// §clang's overloading: the name may be declared many times
+			// with different parameter lists, and which one a call means is
+			// decided by its arguments rather than by the name. Keeping the
+			// first, as the line below does for an ordinary redeclaration,
+			// is what made every <simd/simd.h> call but one a type error.
+			// See overload.go.
+			if !prev.overloadable || !s.overloadable {
+				c.report(id, "'"+name+"' is declared both with and without "+
+					"__attribute__((overloadable))")
+				return
+			}
+			if len(prev.overloads) == 0 {
+				prev.overloads = []*symbol{prev}
+				c.info.OverloadIndex[prev.node] = 0
+			}
+			for i, o := range prev.overloads {
+				if sameSignature(o.typ, s.typ) {
+					// The same overload declared twice — a prototype and
+					// the definition below it, which is how a header is
+					// written. One function, one position.
+					c.info.OverloadIndex[s.node] = i
+					return
+				}
+			}
+			c.info.OverloadIndex[s.node] = len(prev.overloads)
+			prev.overloads = append(prev.overloads, s)
+			return
 		case prev.kind == symTypedef, prev.extern && s.extern:
 			return // permitted; keep the first
 		default:

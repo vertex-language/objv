@@ -196,22 +196,28 @@ func BuildSpecs(unit *token.File, specs ast.DeclSpecs, r Resolver) Spec {
 			r.Report(anchor(specs), "invalid type specifier combination '"+kwString(kws)+"'")
 			k = Int
 		}
-		if IsComplex(Typ(k)) {
-			// §6.10.8.3 lets an implementation that defines
-			// __STDC_NO_COMPLEX__ omit the complex types, and objv defines
-			// it. Diagnosing here is what makes that claim true: without
-			// it the type builds, reaches lower, and fails there with an
-			// internal error that tells the user nothing they can act on.
-			r.Report(anchor(specs), "objv does not implement "+Typ(k).String()+
-				"; it defines __STDC_NO_COMPLEX__, which a program may test for")
-			k = Double
-		}
+		// §6.10.8.3 lets an implementation that defines __STDC_NO_COMPLEX__
+		// omit the complex types, and objv defines it: there is no complex
+		// arithmetic here, and a program that asks gets a true answer.
+		//
+		// The type is still built. Refusing it here refused the
+		// *declaration*, and <complex.h> declares its hundred functions
+		// whatever the macro says — as does <tgmath.h>, which <simd/math.h>
+		// includes, which every SceneKit program reaches. A program that
+		// merely has those headers open is not using complex arithmetic. So
+		// the type exists, with the size and alignment §6.2.5 gives it, and
+		// lowering is where it stops: reg() has no register for one, so a
+		// complex *value* is reported at the line that produced it.
 		base = Typ(k)
 	default:
 		// C11 requires a type specifier (§6.7.2p2): implicit int is gone.
 		r.Report(anchor(specs), "type specifier missing; C11 requires one")
 		base = Typ(Int)
 	}
+
+	// clang's extended vector, which is the whole of <simd/simd.h> and so
+	// the whole of every geometry type SceneKit, Metal and ModelIO take.
+	base = applyVectorAttr(unit, specs, base, r)
 
 	// §6.7.3p2–3: restrict only qualifies pointers; _Atomic must not
 	// qualify an array or function type (reachable via typedef).
@@ -619,4 +625,77 @@ func Selector(pieces []string, keyword bool) string {
 		b.WriteByte(':')
 	}
 	return b.String()
+}
+
+// applyVectorAttr turns the specifier list's base type into a vector when an
+// attribute says so.
+//
+// `typedef __attribute__((__ext_vector_type__(4))) float simd_float4;` is how
+// every vector type on this platform is spelled. The attribute is on the
+// declaration and names a count; the element type is whatever the rest of the
+// specifiers said. Ignoring it leaves `simd_float4` meaning `float`, which is
+// not a diagnostic anywhere — it is a program in which `v.x` is a member
+// reference on a float and `v + w` is scalar addition, and the SDK header
+// that defines it stops being C.
+//
+// `vector_size(n)` is gcc's older spelling of the same thing with the count
+// given in bytes. It is not handled here: the element's size is the model's
+// to know and the model is not in scope, and nothing objv reads uses it. A
+// declaration that carries one keeps its scalar type, which is why the
+// attribute is named in lower/README.md rather than passed over quietly.
+func applyVectorAttr(unit *token.File, specs ast.DeclSpecs, base Type, r Resolver) Type {
+	for _, s := range specs {
+		as, ok := s.(*ast.AttrSpec)
+		if !ok {
+			continue
+		}
+		for _, a := range as.Attrs {
+			if a == nil || a.Name == nil || trimAttr(a.Name.Name(unit)) != "ext_vector_type" {
+				continue
+			}
+			n, ok := attrCount(unit, a)
+			switch {
+			case !ok:
+				r.Report(a, "ext_vector_type takes one integer element count")
+			case n <= 0:
+				r.Report(a, "ext_vector_type element count must be positive")
+			case !IsArithmetic(base) && !IsComplex(base):
+				r.Report(a, "ext_vector_type requires an arithmetic element type, not "+
+					base.String())
+			default:
+				base = &Vector{Elem: base, Len: n}
+			}
+		}
+	}
+	return base
+}
+
+// attrCount reads an attribute's single integer argument. §5.9 keeps an
+// attribute's arguments unparsed, so this is where one is read back.
+func attrCount(unit *token.File, a *ast.Attr) (int64, bool) {
+	if a.Args == nil || len(a.Args.List) != 1 {
+		return 0, false
+	}
+	t := a.Args.List[0]
+	if t.Kind != token.INT_LIT {
+		return 0, false
+	}
+	var n int64
+	for _, c := range unit.Slice(t.Pos, t.End) {
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+		n = n*10 + int64(c-'0')
+	}
+	return n, true
+}
+
+// trimAttr drops the two leading and trailing underscores an attribute may
+// be written with, so that a macro named `packed` cannot break a header that
+// says `__packed__`.
+func trimAttr(n string) string {
+	for len(n) > 4 && n[:2] == "__" && n[len(n)-2:] == "__" {
+		n = n[2 : len(n)-2]
+	}
+	return n
 }

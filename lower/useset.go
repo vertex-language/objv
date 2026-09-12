@@ -48,6 +48,12 @@ type useSet map[string]bool
 // so a caller can index it without asking.
 func (u *unit) planUsed() useSet {
 	// Every definition whose emission depends on being used, by name.
+	// Keyed by the name the definition is *emitted* under, not the name the
+	// source wrote: an overloaded name is several functions, and a use of
+	// one is not a use of its siblings. Keying by the source name made
+	// `which(7)` emit the overload taking a simd_float4 as well, which is
+	// how a program that never mentions a vector came to be refused for
+	// holding one. See overload.go.
 	bodies := make(map[string]*ast.FuncDecl)
 	for _, d := range u.file.Decls {
 		fd, ok := d.(*ast.FuncDecl)
@@ -56,7 +62,7 @@ func (u *unit) planUsed() useSet {
 		}
 		name := u.name(fd.Name)
 		if u.isStatic(fd) || u.isInlineDefinition(name, fd) {
-			bodies[name] = fd
+			bodies[u.linkName(name, fd)] = fd
 		}
 	}
 
@@ -122,6 +128,9 @@ func (u *unit) planUsed() useSet {
 }
 
 // mentions is every name in bodies that appears anywhere in n.
+//
+// An identifier is resolved through the overload the analyzer chose for it,
+// so that naming one of a set does not bring in the rest.
 func (u *unit) mentions(n ast.Node, bodies map[string]*ast.FuncDecl) []string {
 	var out []string
 	ast.Inspect(n, func(x ast.Node) bool {
@@ -129,7 +138,7 @@ func (u *unit) mentions(n ast.Node, bodies map[string]*ast.FuncDecl) []string {
 		if !ok {
 			return true
 		}
-		if name := u.name(id); bodies[name] != nil {
+		if name := u.callLinkName(id); bodies[name] != nil {
 			out = append(out, name)
 		}
 		return true

@@ -68,6 +68,13 @@ const (
 	UnionKind
 	EnumKind
 
+	// VectorKind is clang's extended vector: N elements of one scalar type,
+	// added, multiplied and compared elementwise, held in a register rather
+	// than in memory. It is not in C, and <simd/simd.h> is nothing else —
+	// every type SceneKit, Metal and ModelIO take their geometry in is one,
+	// or a struct of them.
+	VectorKind
+
 	// The Objective-C shapes. An ObjectKind is an interface type — what a
 	// pointer to it points at — and never the type of a value; BlockKind is
 	// already a pointer, as the language's `^` says.
@@ -100,6 +107,15 @@ func Typ(k Kind) *Basic { return &basics[k] }
 func (b *Basic) Kind() Kind { return b.K }
 
 // IsComplex reports whether t is one of §6.2.5's complex types.
+// IsVector reports whether t is an extended vector type.
+func IsVector(t Type) bool { return Unqualify(t).Kind() == VectorKind }
+
+// AsVector is t as a vector, or nil.
+func AsVector(t Type) *Vector {
+	v, _ := Unqualify(t).(*Vector)
+	return v
+}
+
 func IsComplex(t Type) bool {
 	switch Unqualify(t).Kind() {
 	case ComplexFloat, ComplexDouble, ComplexLongDouble:
@@ -285,6 +301,23 @@ const (
 	VLA                              // [expr], expr not constant
 	StarArray                        // [*]
 )
+
+// Vector is §clang's __attribute__((ext_vector_type(N))): N elements of a
+// scalar type.
+//
+// Len is the element count the attribute named, which is not the same as the
+// number of elements the object holds room for: a three-element vector
+// occupies four, because the machine's registers come in powers of two and
+// clang rounds the *size* up while leaving the count alone. `simd_float3`
+// has three elements and sixteen bytes, and both halves of that matter —
+// the fourth lane exists, is not addressable by name beyond .w, and is
+// exactly why a compiler cannot treat the type as an array of three.
+type Vector struct {
+	Elem Type
+	Len  int64
+}
+
+func (*Vector) Kind() Kind { return VectorKind }
 
 // Array is array-of-Elem. Len is meaningful only for FixedArray. Static
 // records a parameter's [static …].
@@ -553,6 +586,10 @@ func (a *Array) String() string {
 		return a.Elem.String() + "[*]"
 	}
 	return a.Elem.String() + "[]"
+}
+
+func (v *Vector) String() string {
+	return fmt.Sprintf("%s __attribute__((ext_vector_type(%d)))", v.Elem, v.Len)
 }
 
 func (f *Func) String() string {

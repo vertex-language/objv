@@ -76,6 +76,21 @@ type Info struct {
 	// passes cannot disagree about which arm the program runs.
 	Generics map[*ast.GenericExpr]ast.Expr
 
+	// Overloads maps each call's callee identifier to the declaration that
+	// __attribute__((overloadable)) resolution chose, and OverloadIndex
+	// gives every declaration of an overloaded name its position in the
+	// set — the prototype and the definition of one overload sharing a
+	// position, because they are one function.
+	//
+	// Together they are how lower tells the overloads of a name apart:
+	// eighteen functions called simd_abs need eighteen symbols, and which
+	// one a call means was settled here. Like Generics, this records an
+	// answer rather than leaving lower to work it out again — the choice is
+	// a typing question, and two passes that each make it are two passes
+	// that can disagree.
+	Overloads     map[*ast.Ident]ast.Node
+	OverloadIndex map[ast.Node]int
+
 	// Captures maps each block literal to the variables its body reached
 	// out of its own scopes for, in first-mention order — which is the
 	// order lower lays them out in the block literal, so that the order is
@@ -120,7 +135,9 @@ func Check(unit *token.File, file *ast.File, model types.Model, mode Mode) (*Inf
 			Sends:  map[*ast.MessageExpr]*types.Method{},
 			Props:  map[*ast.MemberExpr]*types.Property{},
 
-			Generics: map[*ast.GenericExpr]ast.Expr{},
+			Generics:      map[*ast.GenericExpr]ast.Expr{},
+			Overloads:     map[*ast.Ident]ast.Node{},
+			OverloadIndex: map[ast.Node]int{},
 
 			Captures: map[*ast.BlockLit][]Capture{},
 		},

@@ -330,6 +330,20 @@ func (p *Preprocessor) doPragma(r *reader, line []Token, at Site) {
 // _Pragma routes through here too, so the two spellings are interchangeable
 // rather than merely similar.
 func (p *Preprocessor) pragma(r *reader, line []Token, at Site) []Token {
+	// #pragma mark is Xcode's navigation aid: the rest of the line is a
+	// title for a jump bar and is not a token sequence at all. Apple's own
+	// headers write it in prose —
+	//
+	//	#pragma mark - Modifying the Node’s Transform
+	//
+	// with a typographic apostrophe in it, which is not a character §2.1
+	// admits outside a comment or a literal. Passing the line through for
+	// phase 7, as an unrecognized pragma otherwise is, means scanning that
+	// apostrophe as source; consuming it here is both what clang does and
+	// the only reading under which SceneKit's headers are C.
+	if len(line) > 0 && line[0].Is("mark") {
+		return nil
+	}
 	if len(line) > 0 && line[0].Is("once") {
 		if r != nil {
 			r.once = true

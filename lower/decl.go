@@ -147,7 +147,7 @@ func (u *unit) declareFile() {
 		if !ok || fd.Body == nil || fd.Name == nil {
 			continue
 		}
-		name := u.name(fd.Name)
+		name := u.linkName(u.name(fd.Name), fd)
 		// A definition this unit will not emit is not a definition to
 		// declare: a symbol created here and never given a body is a
 		// module the verifier rejects. See notEmitted.
@@ -207,7 +207,7 @@ func (u *unit) declareFile() {
 }
 
 // fileScope is every declaration at file scope, including the ones written
-// inside an @implementation.
+// inside an @interface, an @implementation, a category or a protocol.
 //
 // A C declaration between two methods is not a member of the class: §4.4
 // puts it at file scope like any other, and a `static` there is the ordinary
@@ -222,6 +222,17 @@ func (u *unit) declareFile() {
 // definitions were already emitted from inside the walk over members; what
 // was missing was the declaration, so a method body referring to one reached
 // lowering with nothing to refer to.
+//
+// The same holds inside an *@interface*, and AppKit depends on it. NSApp is
+// declared between the class's first line and its first property:
+//
+//	@interface NSApplication : NSResponder <…>
+//	APPKIT_EXTERN __kindof NSApplication *NSApp;
+//	@property (class, readonly, strong) __kindof NSApplication *sharedApplication;
+//
+// A class body holds methods, properties and instance variables (§4); a C
+// declaration in one is at file scope wherever it stands, and `[NSApp
+// activateIgnoringOtherApps:YES]` is in every AppKit program's main.
 func (u *unit) fileScope() []ast.Decl {
 	out := make([]ast.Decl, 0, len(u.file.Decls))
 	add := func(members []ast.Decl) {
@@ -235,9 +246,15 @@ func (u *unit) fileScope() []ast.Decl {
 	for _, d := range u.file.Decls {
 		out = append(out, d)
 		switch d := d.(type) {
+		case *ast.ClassInterfaceDecl:
+			add(d.Members)
 		case *ast.ClassImplDecl:
 			add(d.Members)
+		case *ast.CategoryDecl:
+			add(d.Members)
 		case *ast.CategoryImplDecl:
+			add(d.Members)
+		case *ast.ProtocolDecl:
 			add(d.Members)
 		}
 	}
@@ -259,6 +276,9 @@ func (u *unit) declareGen(d *ast.GenDecl) {
 			continue
 		}
 		if types.Unqualify(t).Kind() == types.FuncKind {
+			if !u.checkOverloadLinkage(name, it, sp.storage == token.STATIC) {
+				continue
+			}
 			u.declareFuncName(name, t, it)
 			continue
 		}
@@ -363,13 +383,21 @@ func (u *unit) declareFunc(d *ast.FuncDecl) {
 	// A name whose definition this unit omitted gets nothing at all --
 	// not even the import a prototype would otherwise produce, which
 	// would name a symbol no object file has. See notEmitted.
-	if u.omitted[u.name(d.Name)] {
+	if u.omitted[u.linkName(u.name(d.Name), d)] {
+		return
+	}
+	if !u.checkOverloadLinkage(u.name(d.Name), d, u.isStatic(d)) {
 		return
 	}
 	u.declareFuncName(u.name(d.Name), t, d)
 }
 
 func (u *unit) declareFuncName(name string, t types.Type, at ast.Node) {
+	// An overloaded name is several functions and needs several symbols.
+	// See overload.go; the plain name stays with the first of them, so a
+	// declaration that carries the attribute and has no siblings is
+	// unchanged.
+	name = u.linkName(name, at)
 	if u.lookup(name) != nil {
 		return
 	}
@@ -397,6 +425,39 @@ func (u *unit) declareFuncName(name string, t types.Type, at ast.Node) {
 		imp: &pendingImport{sym: u.sym(name), sig: sig}}
 }
 
+// signatureLowerable reports whether every type in a signature has a
+// representation, naming the first that does not.
+func (u *unit) signatureLowerable(ft *types.Func, at ast.Node) bool {
+	if isIndirectResult(ft.Ret) {
+		if _, ok := u.aggType(ft.Ret); !ok {
+			u.unsupported(at, "a return type of "+ft.Ret.String())
+			return false
+		}
+	} else if !types.IsVoid(ft.Ret) {
+		if _, ok := u.reg(ft.Ret); !ok {
+			u.unsupported(at, "a return type of "+ft.Ret.String())
+			return false
+		}
+	}
+	for _, p := range ft.Params {
+		if isAggregate(p.Type) {
+			if _, ok := u.aggType(p.Type); !ok {
+				u.unsupported(at, "a parameter of type "+p.Type.String())
+				return false
+			}
+			continue
+		}
+		if types.IsVoid(p.Type) {
+			continue // `f(void)`, which declares no parameter at all
+		}
+		if _, ok := u.reg(p.Type); !ok {
+			u.unsupported(at, "a parameter of type "+p.Type.String())
+			return false
+		}
+	}
+	return true
+}
+
 // A funcSig is what a function's signature produced: its parameter values and
 // the storage a result too large to return in registers is written through.
 type funcSig struct {
@@ -417,33 +478,32 @@ func (u *unit) funcSignature(fn *ir.Func, ft *types.Func, names []*ast.Ident, at
 		return sig, true
 	}
 	var sig funcSig
+	// Every type is checked before any parameter is added, because adding
+	// one is not undoable: a signature that failed halfway is retried the
+	// next time the function is reached — nothing caches a failure — and
+	// the second attempt appends a second result pointer beside the first.
+	// What came out was the IR builder's complaint about *that*, on a line
+	// of <arm/_types.h>, instead of the diagnostic naming the type this
+	// package cannot lower.
+	if !u.signatureLowerable(ft, at) {
+		return sig, false
+	}
+
 	// The result's storage, before every parameter: such a function does not
 	// return a value at all, it writes one through the pointer its caller
 	// handed it.
 	if isIndirectResult(ft.Ret) {
-		t, ok := u.aggType(ft.Ret)
-		if !ok {
-			u.unsupported(at, "a return type of "+ft.Ret.String())
-			return sig, false
-		}
+		t, _ := u.aggType(ft.Ret)
 		sig.sret = fn.ParamPtr("__ret", ir.SRet(t))
 	}
 	for i, p := range ft.Params {
 		name := declParamName(u, names, i, p)
 		if isAggregate(p.Type) {
-			t, ok := u.aggType(p.Type)
-			if !ok {
-				u.unsupported(at, "a parameter of type "+p.Type.String())
-				return sig, false
-			}
+			t, _ := u.aggType(p.Type)
 			sig.values = append(sig.values, fn.ParamPtr(name, ir.ByVal(t)))
 			continue
 		}
-		r, ok := u.reg(p.Type)
-		if !ok {
-			u.unsupported(at, "a parameter of type "+p.Type.String())
-			return sig, false
-		}
+		r, _ := u.reg(p.Type)
 		sig.values = append(sig.values, addParam(fn, r, name))
 	}
 	if ft.Variadic {
@@ -595,10 +655,16 @@ func (u *unit) defineFunc(d *ast.FuncDecl) {
 		return
 	}
 	name := u.name(d.Name)
+	if !u.checkOverloadLinkage(name, d, u.isStatic(d)) {
+		return
+	}
+	// __func__ keeps the name the source wrote; the symbol is what the
+	// overload suffix belongs to.
+	u.funcNameText = name
+	name = u.linkName(name, d)
 	if u.notEmitted(name, d) {
 		return
 	}
-	u.funcNameText = name
 	defer func() { u.funcNameText = "" }()
 	fn := u.funcFor(name)
 	// An inline definition is emitted internal, not exported. §6.7.4p7 says

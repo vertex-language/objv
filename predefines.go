@@ -330,13 +330,25 @@ func hasBuiltin(name string) bool {
 
 // hasAttribute answers __has_attribute.
 //
-// Yes to everything, which is not laziness. An attribute objv does not
+// Yes to almost everything, which is not laziness. An attribute objv does not
 // implement is one it ignores, and the alternative a header takes when told
 // no is usually a *different declaration* — a macro expanding to nothing
 // rather than to an attribute is fine, but one expanding to a second
 // spelling of the same API is not. Saying yes and ignoring what arrives is
 // what clang does for the attributes it does not know, with a warning it can
 // afford and objv cannot yet.
+//
+// The two that would not have survived being ignored are implemented rather
+// than denied. __ext_vector_type__ and __overloadable__ are what
+// <simd/base.h> opens by asking for —
+//
+//	#if __has_attribute(__ext_vector_type__) && __has_attribute(__overloadable__)
+//
+// — and it defines nothing at all when the answer is no. Saying no is
+// honest and Apple maintains that path, but SceneKit does not take it: its
+// SIMD Bridge is written outside the guard, so a compiler that denies them
+// cannot read <SceneKit/SceneKitTypes.h> at all. See types.Vector and
+// analyzer/overload.go.
 func hasAttribute(name string) bool { return name != "" }
 
 // config assembles the preprocessor configuration for a resolved sysroot.

@@ -161,7 +161,18 @@ func (c *checker) checkReturn(s *ast.ReturnStmt) {
 		return
 	}
 	if types.IsVoid(c.fnRet) {
-		if s.Result != nil {
+		// `return f();` where f returns void. §6.8.6.4p1 forbids it and
+		// clang accepts it, with a warning, as the extension every C
+		// codebase that wraps a void function in another one relies on --
+		// <simd/math.h> among them:
+		//
+		//	static inline void __tg_sincos(simd_float4 x, …) {
+		//	  return _simd_sincos_f4(x, sinp, cosp);
+		//	}
+		//
+		// Nothing is returned either way, so there is nothing to get
+		// wrong; what would be wrong is refusing to read the header.
+		if s.Result != nil && !types.IsVoid(got) {
 			c.report(s, "returning a value from something whose return type is void")
 		}
 		return

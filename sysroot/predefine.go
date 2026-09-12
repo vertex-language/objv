@@ -122,7 +122,16 @@ func archMacros(arch string) []string {
 		// __aarch64__ is the architecture's own name and __arm64__ is
 		// Apple's; CarbonCore's fp.h #errors on a CPU it does not
 		// recognize, and recognizes the second.
-		return []string{"__aarch64__=1", "__arm64__=1", "__arm64=1", "__LP64__=1", "_LP64=1"}
+		//
+		// __ARM_NEON says the vector unit is there, which on AArch64 it
+		// always is — the architecture has no variant without it. What a
+		// header does with the answer is include <arm_neon.h>, which is
+		// the compiler's to supply and which objv supplies: see
+		// builtin/arm_neon.h. Saying yes without it would leave
+		// <simd/simd.h> calling names nothing declared.
+		return []string{"__aarch64__=1", "__arm64__=1", "__arm64=1",
+			"__ARM_NEON=1", "__ARM_NEON__=1", "__ARM_FP=0xE",
+			"__LP64__=1", "_LP64=1"}
 	case "x86_64":
 		return []string{"__x86_64__=1", "__x86_64=1", "__amd64__=1", "__amd64=1",
 			"__LP64__=1", "_LP64=1"}

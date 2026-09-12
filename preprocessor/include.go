@@ -70,6 +70,16 @@ type cached struct {
 	// being read. Unlike guard there is no macro standing behind the
 	// request that the program could undefine.
 	once bool
+
+	// entered is set the first time the file is read, by whatever
+	// directive. It is what #import asks about: the directive means "read
+	// this at most once", and a file already read by #include has been
+	// read. Metal's MTL4BufferRange.h is the header that says so -- it has
+	// no guard of any kind, MTLAccelerationStructureTypes.h #includes it
+	// and MTL4CommandBuffer.h #imports it, and a compiler that only
+	// remembers the #imports reads it twice and reports its struct
+	// redefined.
+	entered bool
 }
 
 // includeMode distinguishes the three directives that read a file.
@@ -210,17 +220,23 @@ func (p *Preprocessor) include(r *reader, name string, angled bool, at Site, mod
 		}
 		p.deps.add(display)
 
-		// A file need not be opened again when it said so, or when it is
-		// shaped like a header that says so:
+		// A file need not be opened again when it said so, when it is
+		// shaped like a header that says so, or when this directive is the
+		// one that asks:
 		//
 		//   - #import asked for it outright, and so did #pragma once;
 		//   - an #ifndef guard says the same thing conditionally, and holds
-		//     only while its macro is defined.
+		//     only while its macro is defined;
+		//   - and #import itself asks, of whatever has already been read.
+		//     It means "at most once", not "at most once by #import": a
+		//     file an earlier #include read has been read, and reading it
+		//     again is what the directive exists to prevent.
 		//
 		// The first is why Objective-C code has no guards to write: the
 		// directive states the conclusion the guard would let a compiler
 		// infer.
-		if c.once || (c.done && c.guard != "" && p.macros.Defined(c.guard)) {
+		if c.once || (mode == incImport && c.entered) ||
+			(c.done && c.guard != "" && p.macros.Defined(c.guard)) {
 			if mode == incImport {
 				c.once = true
 			}
@@ -416,6 +432,7 @@ func (p *Preprocessor) readFile(c *cached, m *Mount, rel, display string, at Sit
 		toks[i].Origin = org
 	}
 	r := &reader{org: org, toks: toks, miValid: true, cache: c}
+	c.entered = true
 
 	// #import means "at most once", and that has to hold for a file that
 	// reaches itself while it is still being read — which Foundation does:

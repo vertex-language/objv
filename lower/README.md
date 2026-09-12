@@ -524,6 +524,9 @@ expression:
 | an inline assembly operand | `ir` has the asm form and the operand-free statement is lowered; a constraint has to be mapped onto the target's register classes, and that table is not written |
 | an array of more than one variably modified dimension | `int a[n][m]`: its element type is itself variably modified, so `a[i]` has a stride nothing in `types.Array` records — every decay and every index would have to carry the extent along. The one-dimensional case is lowered; see vla.go |
 | `sizeof` applied to a variably modified *type name* | `sizeof(int[n])` has no object whose size was computed anywhere, so there is nothing to read it from |
+| a vector *value* | `types.Vector` exists, `<simd/simd.h>` typechecks, and every layout rule and lane name is in place — but nothing here puts one in a register. `ir` has the V128 namespace and the arm64 backend selects it, so the work left is the frontend's: the 3-lane padding, the vectors wider than a register, and the ABI's homogeneous-vector rules for passing and returning one. A signature holding one is refused before a parameter is added, and a call to it is refused too |
+| an overloaded function with external linkage | clang mangles one with the Itanium scheme; objv names it `f.overload.N`, which is enough inside a unit and is not what anything else links against. Every overload in `<simd/simd.h>` is `static inline`, so the platform's own headers are unaffected |
+| `__attribute__((vector_size(n)))` | gcc's older spelling of `ext_vector_type`, with the count in bytes. The element's size is the model's to know and the model is not in scope where the attribute is read; nothing objv reads uses it |
 | `__label__` and `goto *p` | GNU's computed goto. `ir` has the block address (§D) and the arm64 backend selects it, so the lowering is the small half; the scanner, the parser and a block-local label scope are the rest. Nothing in the SDK uses it, which is why it is last |
 
 ## Tests
