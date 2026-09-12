@@ -8,66 +8,33 @@ import (
 	"github.com/vertex-language/objv/token"
 )
 
-// Resolver is what construction needs from its caller: name and tag
-// resolution, constant evaluation, and a place to send diagnostics. The
-// analyzer implements it; a tool with simpler needs can too.
+// Resolver resolves names, tags, types, and evaluates constants during type construction.
 type Resolver interface {
-	// Typedef returns the type a typedef name denotes. The parser
-	// guaranteed the name is in its table; the resolver owns what it means.
+	// Typedef returns the type a typedef name denotes.
 	Typedef(id *ast.Ident) Type
-	// Tag resolves a StructType, EnumDecl, or AtomicType specifier node to
-	// a type, declaring tags as needed.
+	// Tag resolves a StructType, EnumDecl, or AtomicType specifier node to a type.
 	Tag(spec ast.Expr) Type
-	// Object resolves §5.4's ObjectTypeSpecifier — a class name, id, Class,
-	// instancetype, or a type parameter — with its type arguments and
-	// protocol qualifiers already attached. Only the resolver knows what
-	// the names mean.
-	//
-	// What it returns is what the specifier names, which is not always the
-	// same shape: a class name is an *interface* type, because the source
-	// writes the star itself and the declarator will build the pointer,
-	// while id, Class and instancetype are already pointers — the language
-	// spells them without a star, and <objc/objc.h> agrees.
+	// Object resolves an ObjectTypeSpecifier (class name, id, Class, instancetype, or type parameter).
 	Object(spec *ast.ObjectType) Type
-	// Eval evaluates an integer constant expression. ok is false when the
-	// expression isn't constant — which is not an error here: a
-	// non-constant array length is a VLA.
+	// Eval evaluates an integer constant expression. ok is false if not constant.
 	Eval(e ast.Expr) (int64, bool)
 	// Report sends one diagnostic sited at n.
 	Report(n ast.Node, msg string)
-	// TypeOf returns the type of an expression, for §5.3's typeof. It is
-	// the expression's own type — an array stays an array and the
-	// qualifiers stay on — because that is what typeof means.
+	// TypeOf returns the type of an expression (§5.3 typeof).
 	TypeOf(e ast.Expr) Type
 }
 
-// Spec is what a specifier list denotes: a (qualified) type plus the
-// non-type facts riding along with it.
+// Spec represents declaration specifiers: a qualified type plus storage and attributes.
 type Spec struct {
-	// Attrs are the __attribute__ entries written among the specifiers, in
-	// order. Only some of them change a type; the rest are carried so a
-	// caller that grows an interest in one can find it.
 	Attrs       []*ast.Attr
 	Type        Type
 	Storage     token.Kind // TYPEDEF/EXTERN/STATIC/AUTO/REGISTER, or 0
 	ThreadLocal bool
 	Inline      bool
 	Noreturn    bool
-	Aligns      []*ast.AlignasSpec // kept as nodes; checked by the analyzer
-
-	// Block is §5.1's __block, which marks a local as shared with, and
-	// mutable from, every block that captures it. It is a storage class in
-	// the grammar and a fact about the variable rather than about its type,
-	// which is why it is here and not a qualifier.
-	Block bool
-
-	// Auto is §5.3's __auto_type: the declaration's type is its
-	// initializer's, so it cannot be resolved from the specifier list this
-	// Spec was built from. Type is int here, as a placeholder that keeps
-	// every consumer working on a real type; the deduction happens in the
-	// analyzer, which is the first place that has both the specifiers and
-	// each declarator's initializer.
-	Auto bool
+	Aligns      []*ast.AlignasSpec // kept as nodes; checked by analyzer
+	Block       bool               // __block storage class (§5.1)
+	Auto        bool               // __auto_type specifier (§5.3)
 }
 
 // BuildSpecs folds a written-order specifier list into a Spec, enforcing
@@ -196,18 +163,8 @@ func BuildSpecs(unit *token.File, specs ast.DeclSpecs, r Resolver) Spec {
 			r.Report(anchor(specs), "invalid type specifier combination '"+kwString(kws)+"'")
 			k = Int
 		}
-		// §6.10.8.3 lets an implementation that defines __STDC_NO_COMPLEX__
-		// omit the complex types, and objv defines it: there is no complex
-		// arithmetic here, and a program that asks gets a true answer.
-		//
-		// The type is still built. Refusing it here refused the
-		// *declaration*, and <complex.h> declares its hundred functions
-		// whatever the macro says — as does <tgmath.h>, which <simd/math.h>
-		// includes, which every SceneKit program reaches. A program that
-		// merely has those headers open is not using complex arithmetic. So
-		// the type exists, with the size and alignment §6.2.5 gives it, and
-		// lowering is where it stops: reg() has no register for one, so a
-		// complex *value* is reported at the line that produced it.
+		// Build the type even if __STDC_NO_COMPLEX__ is defined, so headers can declare
+		// complex functions; lowering reports any attempt to use complex values.
 		base = Typ(k)
 	default:
 		// C11 requires a type specifier (§6.7.2p2): implicit int is gone.
@@ -627,22 +584,7 @@ func Selector(pieces []string, keyword bool) string {
 	return b.String()
 }
 
-// applyVectorAttr turns the specifier list's base type into a vector when an
-// attribute says so.
-//
-// `typedef __attribute__((__ext_vector_type__(4))) float simd_float4;` is how
-// every vector type on this platform is spelled. The attribute is on the
-// declaration and names a count; the element type is whatever the rest of the
-// specifiers said. Ignoring it leaves `simd_float4` meaning `float`, which is
-// not a diagnostic anywhere — it is a program in which `v.x` is a member
-// reference on a float and `v + w` is scalar addition, and the SDK header
-// that defines it stops being C.
-//
-// `vector_size(n)` is gcc's older spelling of the same thing with the count
-// given in bytes. It is not handled here: the element's size is the model's
-// to know and the model is not in scope, and nothing objv reads uses it. A
-// declaration that carries one keeps its scalar type, which is why the
-// attribute is named in lower/README.md rather than passed over quietly.
+// applyVectorAttr turns base into a vector type if ext_vector_type attribute is present.
 func applyVectorAttr(unit *token.File, specs ast.DeclSpecs, base Type, r Resolver) Type {
 	for _, s := range specs {
 		as, ok := s.(*ast.AttrSpec)
@@ -698,4 +640,36 @@ func trimAttr(n string) string {
 		n = n[2 : len(n)-2]
 	}
 	return n
+}
+
+// BlockQualified reports whether a declarator carries __block among its
+// pointer qualifiers rather than among the declaration's specifiers.
+func BlockQualified(d ast.Declarator) bool {
+	for {
+		var quals ast.DeclSpecs
+		var inner ast.Declarator
+		switch x := d.(type) {
+		case *ast.PtrDeclarator:
+			quals, inner = x.Quals, x.Inner
+		case *ast.BlockPtrDeclarator:
+			quals, inner = x.Quals, x.Inner
+		case *ast.ParenDeclarator:
+			inner = x.Inner
+		case *ast.ArrayDeclarator:
+			inner = x.Inner
+		case *ast.FuncDeclarator:
+			inner = x.Inner
+		default:
+			return false
+		}
+		for _, q := range quals {
+			if ks, ok := q.(*ast.KeywordSpec); ok && ks.Kind == token.BLOCK {
+				return true
+			}
+		}
+		if inner == nil {
+			return false
+		}
+		d = inner
+	}
 }

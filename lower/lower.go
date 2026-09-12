@@ -1,20 +1,7 @@
-// Package lower translates a checked syntax tree into VIR.
+// Package lower translates a checked AST into VIR (Vertex Intermediate Representation).
 //
-// It is the last phase that knows what Objective-C is. Everything below it
-// sees a typed SSA module: a message send has become a call through a
-// selector reference, an instance variable a load of an offset the runtime
-// will write, a block literal a structure and a function, a property access
-// the accessor send the program did not spell. What arrives here as a tree
-// leaves as instructions, and nothing downstream has to ask what `@` meant.
-//
-// The rule this package works to is that lowering is a *translation*, not a
-// second opinion. The analyzer decided what every expression means and
-// recorded it in analyzer.Info — which method a send resolves to, which
-// property a dot names, what type everything has — and this package reads
-// those answers rather than recomputing them. Where it cannot emit something
-// it says so, once, with the construct named: a lowering that guesses
-// produces a program that compiles and misbehaves, which is worse than one
-// that refuses.
+// It translates Objective-C constructs (message sends, ivars, block literals, properties)
+// into typed SSA instructions using semantic answers recorded in analyzer.Info.
 package lower
 
 import (
@@ -28,50 +15,31 @@ import (
 	"github.com/vertex-language/objv/types"
 )
 
-// Options is everything lower needs from its caller that the tree does not
-// say.
+// Options specifies target, ABI, and compiler mode flags for lowering.
 type Options struct {
-	// Name is the module name: a bare identifier, from the primary source
-	// file's stem. Empty means "a".
+	// Name is the module name (stem of primary source file; defaults to "a").
 	Name string
 
-	// Target supplies the use path and the ir.Layout the module opens with.
+	// Target supplies the target layout and use path.
 	Target ir.Target
 
-	// Model must be the same model analyzer.Check ran against. sizeof
-	// disagreeing between the two is a bug, not a configuration.
+	// Model must match the types.Model used during analysis.
 	Model types.Model
 
-	// ABI is the runtime ABI: which runtime, which container, how wide a
-	// pointer is. It decides every symbol name and section this package
-	// writes.
+	// ABI specifies the runtime ABI and container format.
 	ABI runtime.ABI
 
-	// Arch is the target architecture, which decides which objc_msgSend a
-	// send goes through. Getting it wrong corrupts return values rather
-	// than failing to link, which is why it is a field and not a guess.
+	// Arch is the target architecture for selecting msgSend variants.
 	Arch runtime.Arch
 
-	// Platform and Deployment are what §6.10's @available compares against:
-	// which platform this image is for, and the oldest version of it the
-	// image runs on. A check the deployment target already answers is a
-	// constant, which is the common case and the whole reason those two
-	// have to reach this package.
+	// Platform and Deployment are used for @available checks.
 	Platform   runtime.Platform
 	Deployment runtime.OSVersion
 
-	// ARC says the unit was analyzed with automatic reference counting on.
-	// It must match the mode analyzer.Check ran with: the ownership this
-	// package acts on is the ownership that analysis inferred.
+	// ARC indicates whether automatic reference counting is enabled.
 	ARC bool
 
-	// SymbolPrefix is what an identifier becomes in an object file: "_" on
-	// Mach-O, empty on ELF and COFF.
-	//
-	// It is stated rather than derived from Target, because the mapping is
-	// the language's and not the IR's — nothing below this package renames
-	// a symbol. A module built with the wrong prefix compiles and fails to
-	// link, naming what it could not find.
+	// SymbolPrefix is the symbol prefix ("_" on Mach-O, empty on ELF/COFF).
 	SymbolPrefix string
 }
 
@@ -115,124 +83,75 @@ type unit struct {
 	scope *scope // innermost open scope
 	fn    *fnState
 
-	// The pools. Each of these is a name the runtime or the linker expects
-	// to see once per translation unit however many times the source wrote
-	// it: two sends of the same selector share one selector reference, and
-	// two mentions of a string share one constant.
+	// Reference and string pools
 	selRefs   map[string]ir.Symbol
 	classRefs map[string]ir.Symbol
 	superRefs map[string]ir.Symbol
 	strs      map[string]ir.Symbol
 	cstrs     map[string]ir.Symbol
 
-	// externs are the runtime entry points this unit called, so that each
-	// is imported once.
+	// externs tracks imported runtime entry points.
 	externs map[string]*ir.FuncImport
 
-	// classSyms are the class and metaclass objects this unit defined or
-	// referenced, by symbol name, so that a reference and a definition are
-	// one symbol.
+	// classSyms tracks class and metaclass symbols.
 	classSyms map[string]ir.Symbol
 
-	// sigs is each function's parameter list, built once: a call has to see
-	// the signature before the body is lowered, and parameters may only be
-	// added before the entry block exists. See funcSignature.
+	// sigs caches parameter lists for functions.
 	sigs map[*ir.Func]funcSig
 
-	// funcNameText is what __func__ says inside the body being built.
+	// funcNameText is the value of __func__ for the current function.
 	funcNameText string
 
-	// classMethod is set while a + method's body is being built, so that
-	// the fnState it makes knows which side of the class/metaclass pair a
-	// super send starts above. See superRef.
+	// classMethod indicates if currently lowering a class method (+).
 	classMethod bool
 
-	// ehTypes are the type-info objects this unit defined, one per class it
-	// implements and something here catches. See try.go.
+	// ehTypes tracks generated type-info symbols for caught exception types.
 	ehTypes map[string]ir.Symbol
 
-	// What the metadata pass will need: the classes and categories this
-	// unit implemented, the methods it compiled, and the lists the runtime
-	// scans.
-	impls        []*types.Class
-	categories   []categoryImpl
-	methodFns    []methodFn
-	classList    []ir.Symbol
-	categoryList []ir.Symbol
-
-	// And the non-lazy halves of those two: the entries that implement
-	// +load, which the runtime calls at image load rather than on demand.
+	// Metadata collection
+	impls               []*types.Class
+	categories          []categoryImpl
+	methodFns           []methodFn
+	classList           []ir.Symbol
+	categoryList        []ir.Symbol
 	nonLazyClassList    []ir.Symbol
 	nonLazyCategoryList []ir.Symbol
 
-	// staticInit is what the unit's declarations said about running a
-	// function around main, by name, and ctors and dtors are the
-	// definitions it actually emitted for those. See ctor.go.
+	// staticInit, ctors, dtors track module constructor/destructor functions.
 	staticInit   map[string]staticInitAttrs
 	ctors, dtors []initEntry
 
-	// defines is the functions this unit defines, so that a declaration of
-	// one is not imported alongside it; funcs is the definition itself.
-	defines map[string]bool
-	funcs   map[string]*ir.Func
-
-	// definesVar is the same answer for file-scope objects: a header's
-	// extern declaration and the definition below it are one object, and
-	// whichever is read first must not decide which it is.
+	defines    map[string]bool
+	funcs      map[string]*ir.Func
 	definesVar map[string]bool
+	omitted    map[string]bool
 
-	// omitted is the definitions notEmitted refused, by name. They are not
-	// imports either: an import is a promise the linker has to keep, and
-	// there is no symbol anywhere for an unused static function. Nothing
-	// references one, because a reference is exactly what would have put it
-	// in the used set.
-	omitted map[string]bool
-
-	// deallocating marks the -dealloc being lowered, which ARC ends with a
-	// call to the superclass's.
+	// deallocating indicates whether currently lowering -dealloc.
 	deallocating bool
 
-	// hasCxxDestruct is the classes that emitted one, which the class's flag
-	// word has to say: the runtime checks the flag before it looks the
-	// selector up.
+	// hasCxxDestruct tracks classes with a synthesized .cxx_destruct.
 	hasCxxDestruct map[*types.Class]bool
 
-	// byrefHelpers are the helper functions a __block variable's structure
-	// carries, interned by name: one helper serves every structure with an
-	// object at the same offset.
+	// byrefHelpers caches copy/dispose helper functions for __block variables.
 	byrefHelpers map[string]ir.Symbol
 
-	// blockBase is the name of the function whose body is being lowered and
-	// blockSeq the block literals seen inside it, which together name every
-	// symbol a literal produces. They belong to the outermost function and
-	// not to the invoke function a nested literal is inside: clang numbers
-	// blocks per function, so a block inside a block is _2 and not
-	// _block_invoke_block_invoke, and a backtrace reads the same either way.
+	// blockBase and blockSeq generate unique symbol names for block literals.
 	blockBase string
 	blockSeq  int
 
-	// undescribed is a file-scope name lower could give no VIR type, and
-	// the reason. Nothing is reported when the declaration is read: a
-	// system header declares far more than any one program uses, and the
-	// place a missing type actually costs the user something is the use.
+	// undescribed stores error messages for unsupported file-scope types, reported on use.
 	undescribed map[string]string
 
-	// ivarSyms are the offset variables, by symbol name. A body reads one
-	// before the metadata pass writes it, and both need the same symbol.
+	// ivarSyms maps ivar offset symbol names to their symbols.
 	ivarSyms map[string]ir.Symbol
 
-	// records are the VIR struct types C records became, by identity. A
-	// nil entry is a record VIR cannot describe, remembered so that the
-	// same one is not walked twice.
+	// records caches lowered VIR struct types for C records.
 	records map[*types.Record]*ir.Type
 
-	// protoSyms are the protocol objects this unit emitted, by name. A
-	// protocol is emitted on first mention and coalesced at link time.
+	// protoSyms tracks emitted protocol symbols.
 	protoSyms map[string]ir.Symbol
 
-	// used is which conditional definitions this unit emits — see
-	// useset.go. Nil until asked for, because a unit with no static or
-	// inline definition never needs the walk.
+	// used tracks conditionally-emitted static/inline definitions.
 	used useSet
 
 	symPrefix string

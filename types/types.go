@@ -1,21 +1,8 @@
 // Package types represents Objective-C types and constructs them from
 // declaration specifiers and declarators.
 //
-// Types are trees; struct, union, enum, class and protocol types
-// additionally have identity — two *Record values are the same type iff they
-// are the same pointer, which is what makes a tag namespace meaningful, and
-// two *Class values name the same class on the same terms. Constraint
-// checking that the parser deliberately deferred (specifier multisets,
-// qualifier placement, static and * in array declarators, function and array
-// derivation rules) happens here, during construction, reported through the
-// Resolver.
-//
-// The Objective-C half is in objc.go, and it is deliberately clang's model
-// rather than a simpler one: an interface is a type (*Object), and what a
-// program calls "an NSString" is a *pointer* to one. `id` is that pointer
-// with no class named. Reading `NSString *` as one atomic thing would work
-// until the first `__strong NSString *__weak *`, where the two ownership
-// qualifiers belong to different levels.
+// Types form trees with pointer identity for struct, union, enum, class,
+// and protocol types.
 package types
 
 import (
@@ -43,15 +30,11 @@ const (
 	LongLong
 	ULongLong
 
-	// Int128 and UInt128 are gcc's __int128, which clang carries on every
-	// 64-bit target and Apple's headers use: <mach/arm/_structs.h>
-	// declares the NEON register file as __uint128_t __v[32], and nothing
-	// narrower describes a 128-bit vector register.
+	// Int128 and UInt128 represent gcc/clang's __int128 extension.
 	Int128
 	UInt128
 
-	// Float16 is IEEE binary16, which <math.h> declares its half-precision
-	// entry points in terms of.
+	// Float16 is IEEE binary16 (_Float16).
 	Float16
 
 	Float
@@ -68,16 +51,10 @@ const (
 	UnionKind
 	EnumKind
 
-	// VectorKind is clang's extended vector: N elements of one scalar type,
-	// added, multiplied and compared elementwise, held in a register rather
-	// than in memory. It is not in C, and <simd/simd.h> is nothing else —
-	// every type SceneKit, Metal and ModelIO take their geometry in is one,
-	// or a struct of them.
+	// VectorKind is clang's extended vector (__attribute__((ext_vector_type(N)))).
 	VectorKind
 
-	// The Objective-C shapes. An ObjectKind is an interface type — what a
-	// pointer to it points at — and never the type of a value; BlockKind is
-	// already a pointer, as the language's `^` says.
+	// Objective-C types.
 	ObjectKind
 	BlockKind
 	TypeParamKind
@@ -132,16 +109,11 @@ const (
 	QVolatile
 	QRestrict
 	QAtomic
-	// QKindOf is §5.6's __kindof, which qualifies an object pointer to
-	// admit any subclass of the class named while keeping that class's
-	// interface for message sends. It is a qualifier and not a flag on the
-	// object because that is where it is written and what it does: it
-	// changes what may be assigned, not what the type is.
+	// QKindOf qualifies an object pointer to admit subclasses (§5.6 __kindof).
 	QKindOf
 )
 
-// Lifetime is an ARC ownership qualifier (§5.6). Exactly one applies to an
-// object pointer, so it is an enumeration rather than a bit in Qual.
+// Lifetime is an ARC ownership qualifier (§5.6).
 type Lifetime uint8
 
 const (
@@ -166,9 +138,7 @@ func (l Lifetime) String() string {
 	return ""
 }
 
-// Nullability is §5.6's nullability qualifier. Like Lifetime it is one of a
-// set rather than a bit, and like Lifetime it qualifies a pointer rather
-// than describing what the pointer points at.
+// Nullability is a pointer nullability qualifier (§5.6).
 type Nullability uint8
 
 const (
@@ -212,8 +182,7 @@ func Qualify(t Type, q Qual) Type {
 	return &Qualified{Q: q, T: t}
 }
 
-// WithLifetime applies an ownership qualifier, replacing any already
-// present — a type has one owner or none.
+// WithLifetime applies an ownership qualifier, replacing any already present.
 func WithLifetime(t Type, l Lifetime) Type {
 	if l == LifeNone {
 		return t
@@ -236,10 +205,7 @@ func WithNullability(t Type, n Nullability) Type {
 	return &Qualified{Null: n, T: t}
 }
 
-// WithoutQual removes qualifiers, keeping the rest. It is what moving a
-// qualifier from one level of a type to another needs — __kindof is written
-// on the class and belongs on the pointer — and it drops the wrapper
-// entirely when nothing is left in it.
+// WithoutQual removes C qualifiers, dropping the Qualified wrapper if empty.
 func WithoutQual(t Type, q Qual) Type {
 	in, ok := t.(*Qualified)
 	if !ok || in.Q&q == 0 {
@@ -302,16 +268,7 @@ const (
 	StarArray                        // [*]
 )
 
-// Vector is §clang's __attribute__((ext_vector_type(N))): N elements of a
-// scalar type.
-//
-// Len is the element count the attribute named, which is not the same as the
-// number of elements the object holds room for: a three-element vector
-// occupies four, because the machine's registers come in powers of two and
-// clang rounds the *size* up while leaving the count alone. `simd_float3`
-// has three elements and sixteen bytes, and both halves of that matter —
-// the fourth lane exists, is not addressable by name beyond .w, and is
-// exactly why a compiler cannot treat the type as an array of three.
+// Vector is clang's __attribute__((ext_vector_type(N))): N elements of a scalar type.
 type Vector struct {
 	Elem Type
 	Len  int64
@@ -355,42 +312,18 @@ type Field struct {
 	Width    int64 // meaningful when BitField
 }
 
-// Record is a struct or union type. Identity is the tag: two Records are the
-// same type iff they are the same pointer. Complete flips to true when a
-// definition supplies the member list.
+// Record is a struct or union type with pointer identity.
 type Record struct {
 	Union    bool
 	Name     string // "" for anonymous
 	Fields   []Field
 	Complete bool
-
-	// Packed drops the padding between members: every one is placed at the
-	// next byte rather than at the next offset its own alignment admits,
-	// and the record itself aligns to one. It is
-	// __attribute__((packed)), which is in every protocol header written
-	// for gcc — a wire format is a struct whose layout the protocol chose.
-	Packed bool
-
-	// Align, when non-zero, is the alignment __attribute__((aligned(n)))
-	// asked for, in bytes. It raises the record's alignment and therefore
-	// its size, and it applies whether or not the record is packed: the two
-	// attributes answer different questions, one about the members and one
-	// about the whole.
-	Align int64
-
-	// Pack, when non-zero, is the ceiling #pragma pack put on each member's
-	// alignment. A member whose type wants less keeps what it wants; one
-	// that wants more is placed at Pack instead.
-	Pack int64
+	Packed   bool  // __attribute__((packed))
+	Align    int64 // __attribute__((aligned(n)))
+	Pack     int64 // #pragma pack ceiling
 }
 
-// MemberAlign is the alignment a member of natural alignment n is actually
-// placed at in this record: capped by #pragma pack, and flattened to one by
-// __attribute__((packed)).
-//
-// It is a method rather than a rule spelled at each layout, because there
-// are two layouts — the Model's, which answers sizeof, and lower's, which
-// places the members — and they have to agree.
+// MemberAlign returns the alignment a member of natural alignment n is placed at in this record.
 func (r *Record) MemberAlign(n int64) int64 {
 	switch {
 	case r.Packed:
@@ -408,38 +341,13 @@ func (r *Record) Kind() Kind {
 	return StructKind
 }
 
-// Enum is an enumerated type; like Record, it has identity.
-//
-// Under is the integer type the enumeration is compatible with. C17
-// §6.7.2.2p4 leaves the choice to the implementation, and this one answers
-// int wherever the enumerators fit — so Under is Invalid there and
-// Underlying says int.
-//
-// Fixed records §5.8's `enum E : T`, the fixed underlying type NS_ENUM
-// expands to and every enumeration in the Cocoa headers carries. A fixed
-// type is not a widening: it is the type the program named, it completes the
-// enumeration at the specifier, and it decides how a value of the type is
-// boxed (§6.8).
+// Enum is an enumerated type with pointer identity.
 type Enum struct {
 	Name     string
 	Complete bool
-	Under    Kind
-	Fixed    bool
-
-	// Defined records that a brace-enclosed enumerator list was seen.
-	//
-	// It is not Complete. §5.8's fixed underlying type completes the type
-	// at the specifier — `enum E : NSInteger;` declares a type an object
-	// may be declared of — while leaving the enumeration itself still to
-	// be defined, once. NS_ENUM writes both, in that order:
-	//
-	//	typedef enum E : NSInteger E;
-	//	enum E : NSInteger { ... };
-	//
-	// so a compiler that read Complete as "already defined" would call the
-	// second line a redefinition of the first, and no Cocoa header would
-	// get past its first enumeration.
-	Defined bool
+	Under    Kind // compatible integer kind, or Invalid for default (int)
+	Fixed    bool // true for fixed underlying type (enum E : T)
+	Defined  bool // true if brace-enclosed enumerator list was seen
 }
 
 func (*Enum) Kind() Kind { return EnumKind }
@@ -453,12 +361,6 @@ func (e *Enum) Underlying() Kind {
 }
 
 // ConstType is the type an enumeration constant of e has.
-//
-// §6.4.4.3p2 says int, and this answers int wherever that is a type the
-// value fits. Where the enumeration has a fixed underlying type there is no
-// such option: NS_ENUM exists precisely so that the constants have the
-// enumeration's type, which is what a `switch` over one and an
-// NSInteger-typed parameter both depend on.
 func (e *Enum) ConstType() Type {
 	if e.Fixed || e.Under != Invalid {
 		return e
@@ -466,8 +368,7 @@ func (e *Enum) ConstType() Type {
 	return Typ(Int)
 }
 
-// IsInteger reports whether t (unqualified) is an integer type; enums count
-// (§6.2.5p17).
+// IsInteger reports whether t (unqualified) is an integer type; enums count (§6.2.5p17).
 func IsInteger(t Type) bool {
 	switch Unqualify(t).Kind() {
 	case Bool, Char, SChar, UChar, Short, UShort, Int, UInt,
@@ -477,9 +378,7 @@ func IsInteger(t Type) bool {
 	return false
 }
 
-// IsSigned reports whether an integer type is signed. Plain char's
-// signedness is the Model's business, not the type's; it reports false here
-// and callers that care ask the Model.
+// IsSigned reports whether an integer type is signed (plain char signedness is target-dependent).
 func IsSigned(t Type) bool {
 	u := Unqualify(t)
 	if e, ok := u.(*Enum); ok {
@@ -565,10 +464,7 @@ func (q *Qualified) String() string {
 	return b.String()
 }
 
-// String writes a pointer the way the language does. That is not always
-// with a star: `id`, `Class`, `instancetype` and `id<NSCopying>` are pointer
-// types whose spelling has none, because the pointer is inside the name.
-// Only a pointer to a named class takes one — `NSString *`.
+// String formats the pointer type, omitting '*' for implicit pointer types like id.
 func (p *Pointer) String() string {
 	if o, ok := Unqualify(p.Elem).(*Object); ok && o.Base == nil {
 		return p.Elem.String()

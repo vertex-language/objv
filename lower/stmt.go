@@ -153,6 +153,10 @@ func (u *unit) localDecl(d ast.Decl) {
 		if name == "" || t == nil {
 			continue
 		}
+		// __block may be written after the caret as well as before the
+		// type; both say the variable is shared. See types.BlockQualified.
+		sp := sp
+		sp.block = sp.block || types.BlockQualified(it.Decl)
 		if sp.storage == token.EXTERN {
 			u.declareGlobalVar(name, t, sp, it)
 			continue

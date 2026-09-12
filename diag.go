@@ -8,15 +8,7 @@ import (
 	"github.com/vertex-language/objv/token"
 )
 
-// A Diagnostic is one report, sited in the file the user wrote.
-//
-// The site is the point of the type. Phase 4's diagnostics span every file
-// the include graph reached — for Objective-C that is hundreds of them
-// behind one #import — and phases 5-7's arrive in the *preprocessed* text,
-// which is a different position space and reporting them there names a line
-// the file only has after preprocessing. Both are mapped back before they
-// leave this package, so a caller renders one thing one way and every
-// diagnostic points at what was typed.
+// A Diagnostic represents a compiler report mapped back to original source files.
 type Diagnostic struct {
 	Severity token.Severity
 	Site     preprocessor.Site

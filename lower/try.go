@@ -1,43 +1,11 @@
 package lower
 
-// §7.2's @try, @catch and @finally, and the type-info a @catch names.
+// Lowering for @try, @catch, and @finally exception handling (§7.2).
 //
-// # The shape
-//
-// A @try is a region of the function whose calls carry a second edge. Every
-// call inside one becomes an invoke to the region's landing pad (§G3), and
-// the pad is where the decision is made: the personality routine has already
-// matched the thrown object against the clauses, and hands the pad a
-// selector saying which one. So the pad is a switch, and each arm is a
-// @catch body with objc_begin_catch and objc_end_catch around it.
-//
-// # @finally
-//
-// The hard part, because a @finally runs on every way out — falling off the
-// end of the body, returning through it, breaking out of a loop that crosses
-// it, and unwinding past it — and it has to be one copy of the body rather
-// than one per exit.
-//
-// So it is a block reached from all of them, with a slot saying where to go
-// afterwards. Every exit stores a code and branches in; the block ends in a
-// br_table over the codes. A return stores its value in a slot of its own
-// first, because the return itself happens on the other side.
-//
-// The unwinding exit is clang's rather than C++'s: the pad's last clause is a
-// catch-all, so the personality stops at this frame, objc_begin_catch takes
-// the object, the @finally runs, and objc_exception_rethrow puts it back on
-// its way. A cleanup clause and a resume would be the C++ spelling and would
-// need a second copy of the @finally body — resume takes the exception object
-// of a pad that dominates it (§19.5), and a block every exit reaches is
-// dominated by none of them.
-//
-// # What is not written
-//
-// A goto out of a @try that has a @finally. The destination table can hold
-// any number of exits and a break or a continue reaches one through it, but
-// a goto's target is a label that may not have been lowered yet, and its
-// depth in the enclosing @try stack is not known where the goto stands.
-// Refused by name rather than lowered without the @finally.
+// Calls within @try become invokes routing to a landing pad switch over catch clauses
+// wrapped in objc_begin_catch/objc_end_catch.
+// @finally blocks execute on all exit paths (normal fallthrough, returns, breaks/continues,
+// and unwinding via objc_exception_rethrow) using an exit-code dispatch table.
 
 import (
 	"github.com/vertex-language/ir"

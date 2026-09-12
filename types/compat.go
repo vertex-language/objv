@@ -1,17 +1,8 @@
 package types
 
-// Type classification, the conversions C11 §6.3 defines over it, §6.2.7's
-// compatibility, and the Objective-C rules that sit on top of both.
-//
-// These live here rather than in one of the packages that needs them because
-// both do: the analyzer decides whether an assignment is a constraint
-// violation, and lower decides what conversion to emit, and the two must
-// agree about what the types are. Where they disagreed, the analyzer would
-// accept a program lower could not emit, or reject one it could.
+// Type classification, C11 §6.3 conversions, §6.2.7 compatibility, and Objective-C rules.
 
-// IsFloat reports whether t is one of §6.2.5's real floating types. The
-// complex types are not included: objv does not implement them, and a
-// predicate that admitted them would let a later phase believe it could.
+// IsFloat reports whether t is a real floating type (Float16, Float, Double, LongDouble).
 func IsFloat(t Type) bool {
 	switch Unqualify(t).Kind() {
 	case Float16, Float, Double, LongDouble:
@@ -20,20 +11,15 @@ func IsFloat(t Type) bool {
 	return false
 }
 
-// IsArithmetic is §6.2.5p18: an integer or floating type.
+// IsArithmetic reports whether t is an integer or floating-point type (§6.2.5p18).
 func IsArithmetic(t Type) bool { return IsInteger(t) || IsFloat(t) }
 
-// IsScalar is §6.2.5p21: an arithmetic type or a pointer. A block pointer is
-// one: it holds an address, it tests against zero, and it is what `if (block)`
-// asks about. So is §5.5's type parameter, for the same reason — it is erased
-// to an object pointer, and `if (box.item)` is how a generic class asks
-// whether it holds anything.
+// IsScalar reports whether t is an arithmetic, pointer, block pointer, or type parameter (§6.2.5p21).
 func IsScalar(t Type) bool {
 	return IsArithmetic(t) || IsPointer(t) || IsBlock(t) || AsTypeParam(t) != nil
 }
 
-// IsPointer reports whether t is a pointer type. An array is not one until it
-// has decayed; see Decay.
+// IsPointer reports whether t is a pointer type.
 func IsPointer(t Type) bool { return Unqualify(t).Kind() == PointerKind }
 
 // IsVoid reports whether t is void.
@@ -78,12 +64,8 @@ func AsRecord(t Type) *Record {
 	return r
 }
 
-// Decay applies §6.3.2.1p3-4: an array becomes a pointer to its first
-// element, a function becomes a pointer to itself. Everything else is
-// unchanged.
-//
-// The element's qualifiers travel with it — `const char[8]` decays to
-// `const char *`, which is what makes assigning it to `char *` a violation.
+// Decay applies C11 §6.3.2.1p3-4 conversions: array decays to pointer to element,
+// function decays to function pointer.
 func Decay(t Type) Type {
 	switch u := Unqualify(t).(type) {
 	case *Array:
@@ -94,17 +76,13 @@ func Decay(t Type) Type {
 	return t
 }
 
-// Promote applies §6.3.1.1p2's integer promotions: a type of integer rank
-// below int becomes int, or unsigned int where int cannot represent every
-// value of the original. Everything else is unchanged.
+// Promote applies C11 §6.3.1.1p2 integer promotions.
 func (m Model) Promote(t Type) Type {
 	t = Unqualify(t)
 	if !IsInteger(t) {
 		return t
 	}
 	if e, isEnum := t.(*Enum); isEnum {
-		// An enumerated type promotes to the type it is compatible with:
-		// int, unless an enumerator too large for one widened it.
 		return Typ(e.Underlying())
 	}
 	intBits, _ := m.IntBits(Typ(Int))

@@ -9,25 +9,8 @@ import (
 	"github.com/vertex-language/objv/types"
 )
 
-// The predefined macros, in three parts that belong in three places.
-//
-//	preprocessor  the language's: __OBJC__, __OBJC2__, __STDC__, __GNUC__
-//	sysroot       the platform's: __APPLE__, __LITTLE_ENDIAN__, and the
-//	              deployment target every availability macro reads
-//	here          the type model's: how wide a long is, what float.h says
-//
-// The split follows what each part knows. Phase 4 does not import types and
-// must not learn what an SDK is; sysroot probes a machine and must not learn
-// what a Model is; this package has both and composes them.
-//
-// Without the model half the system headers do not compile: Darwin's
-// <stdio.h> needs __SIZE_TYPE__ and one of these wrong is a struct of the
-// wrong shape rather than an error message.
-
-// Predefines computes the target-dependent macros the builtin headers are
-// written against. The names are gcc's spellings, on purpose — Apple's
-// headers already test them, and inventing a second vocabulary for the same
-// facts would buy nothing.
+// Predefines computes target-dependent macros (limits, integer widths, floating-point
+// representations) that builtin and SDK headers expect based on types.Model.
 func (t Target) Predefines() []preprocessor.Predefine {
 	m := t.model
 	var ds []preprocessor.Predefine
@@ -328,27 +311,8 @@ func hasBuiltin(name string) bool {
 	return false
 }
 
-// hasAttribute answers __has_attribute.
-//
-// Yes to almost everything, which is not laziness. An attribute objv does not
-// implement is one it ignores, and the alternative a header takes when told
-// no is usually a *different declaration* — a macro expanding to nothing
-// rather than to an attribute is fine, but one expanding to a second
-// spelling of the same API is not. Saying yes and ignoring what arrives is
-// what clang does for the attributes it does not know, with a warning it can
-// afford and objv cannot yet.
-//
-// The two that would not have survived being ignored are implemented rather
-// than denied. __ext_vector_type__ and __overloadable__ are what
-// <simd/base.h> opens by asking for —
-//
-//	#if __has_attribute(__ext_vector_type__) && __has_attribute(__overloadable__)
-//
-// — and it defines nothing at all when the answer is no. Saying no is
-// honest and Apple maintains that path, but SceneKit does not take it: its
-// SIMD Bridge is written outside the guard, so a compiler that denies them
-// cannot read <SceneKit/SceneKitTypes.h> at all. See types.Vector and
-// analyzer/overload.go.
+// hasAttribute answers __has_attribute. Returns true for any non-empty attribute name;
+// attributes not specifically implemented are tolerated and ignored.
 func hasAttribute(name string) bool { return name != "" }
 
 // config assembles the preprocessor configuration for a resolved sysroot.

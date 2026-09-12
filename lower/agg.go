@@ -7,29 +7,10 @@ import (
 	"github.com/vertex-language/objv/types"
 )
 
-// Structs and unions across a call boundary.
+// Aggregate parameter and return lowering.
 //
-// C passes and returns them by value, and no calling convention passes them
-// in one register. What each convention does instead is a classification —
-// AAPCS64 asks whether the aggregate is homogeneous, then whether it is
-// sixteen bytes or less, then falls back to the caller's copy by reference;
-// SysV sorts each eightbyte into INTEGER, SSE or MEMORY — and neither answer
-// is derivable from the other.
-//
-// None of that is here. VIR states the *question* in the signature and the
-// backend answers it: `byval` on a pointer parameter says the bytes it points
-// at are the argument, and `sret` on the first says the callee writes its
-// result through it. What comes out the other side is registers where the
-// convention wants registers and memory where it wants memory, per target,
-// which is the only way a compiler with two backends gets this right once.
-//
-// So this file is about what lower still owes:
-//
-//   - an aggregate is held by address everywhere in this package, so an
-//     argument is already a pointer and a result is already storage;
-//   - the argument has to be a *copy*, because the callee owns its
-//     parameter and may assign to it;
-//   - the result's storage is the caller's, allocated before the call.
+// Structs and unions are passed via VIR `byval` pointers (copied into local storage
+// to preserve pass-by-value semantics) and returned via `sret` pointers.
 
 // aggType is the named VIR type an aggregate parameter or result names in a
 // signature. An array is not one: C decays an array parameter to a pointer

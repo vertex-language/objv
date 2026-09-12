@@ -2,85 +2,39 @@ package types
 
 import "strings"
 
-// The Objective-C type model, which is clang's.
+// Objective-C type model (matching clang).
 //
-// An interface is a type — *Object — and what a program calls "an NSString"
-// is a pointer to one. `id` is that pointer with no class named, which is
-// also what <objc/objc.h> says it is. The two-level shape is not ceremony:
-// `__strong NSString *__weak *` has an ownership qualifier at each level, and
-// a model that folded the pointer into the class could not say which is
-// which.
-//
-// Classes and protocols have identity, on the same terms records do: two
-// *Class values name the same class iff they are the same pointer. That is
-// what makes `@class NSString;` followed by `@interface NSString` one class
-// rather than two, and what lets a subclass test be a walk up a chain.
+// An interface is an *Object, and `id` is an object pointer without a class named.
+// Classes and protocols have pointer identity.
 
-// Class is an Objective-C class: an @interface, whatever it was reached by.
-//
-// It is an entity and not a Type — a class has no Kind, and nothing can hold
-// a value of one. What a program writes as a type is an *Object naming it,
-// behind a pointer.
-//
-// A class named only by @class is incomplete — the name exists, and nothing
-// else about it does — which is exactly enough to declare a pointer to one
-// and not enough to send it a message.
+// Class is an Objective-C class (@interface).
+// An incomplete class is forward-declared with @class.
 type Class struct {
 	Name     string
 	Super    *Class
 	Complete bool
 
-	// Root marks a class with no superclass:
-	// __attribute__((objc_root_class)), or NSObject itself. A root class is
-	// where the metaclass chain closes, so the runtime metadata needs to
-	// know which one it is.
+	// Root marks a class with no superclass (__attribute__((objc_root_class)) or NSObject).
 	Root bool
 
 	Protocols  []*Protocol
 	TypeParams []*TypeParam
 
-	// SuperArgs is what the superclass was specialized with, written in
-	// terms of this class's own parameters:
-	//
-	//	@interface NSMutableDictionary<KeyType, ObjectType> :
-	//	    NSDictionary<KeyType, ObjectType>
-	//
-	// A method is declared where it is declared — -allKeys is
-	// NSDictionary's, and its `NSArray<KeyType> *` names *NSDictionary's*
-	// KeyType — so a receiver specialized on the subclass's parameters can
-	// only be substituted into it by carrying the arguments up this link.
+	// SuperArgs records the type arguments specialized for the superclass.
 	SuperArgs  []Type
 	Ivars      []Ivar
 	Methods    []*Method
 	Properties []*Property
 
-	// Categories records the names of the categories that extended this
-	// class, in the order they were read. A category's members are folded
-	// into Methods and Properties — that is what a category does — and this
-	// is what a diagnostic uses to say which one a duplicate came from.
+	// Categories records names of categories extending this class, in declaration order.
 	Categories []string
 }
 
-// Protocol is an Objective-C protocol. Like a class it has identity, and
-// like a class it may be forward-declared and incomplete.
+// Protocol is an Objective-C protocol (@protocol).
 type Protocol struct {
 	Name string
 
-	// Declared records that the unit declared this protocol somewhere, in
-	// either of the two forms §4.3 admits: `@protocol P;` or a definition.
-	// Complete records that it has a body.
-	//
-	// The two are separate because a use only needs the first, and needs it
-	// from anywhere in the unit rather than from above. Foundation writes
-	//
-	//	@protocol NSFileManagerDelegate;
-	//	@interface NSFileManager : NSObject
-	//	@property id <NSFileManagerDelegate> delegate;
-	//	@end
-	//	@protocol NSFileManagerDelegate ... @end
-	//
-	// twenty-one times, and reading "declared" as "complete here" warns on
-	// every one of them.
+	// Declared is true if forward-declared or defined; Complete is true if defined with a body.
 	Declared   bool
 	Complete   bool
 	Inherited  []*Protocol
@@ -124,48 +78,30 @@ func (v Variance) String() string {
 	return ""
 }
 
-// Object is §5.4's ObjectTypeSpecifier: an interface type, optionally
-// specialized and optionally qualified by protocols.
-//
-// Base is nil for `id`. Meta is `Class`, the type of a class object.
-// Instancetype is the placeholder a method's return type may be written as,
-// which the analyzer resolves to the receiver's class at each send.
-//
-// A value never has this type — an interface cannot be declared by value —
-// so an Object always appears as a Pointer's element. The declaration that
-// tries otherwise is a diagnostic the analyzer gives, and it needs this type
-// to exist in order to give it.
+// Object is an interface type (§5.4), optionally specialized and qualified by protocols.
+// Base is nil for `id`. Meta is true for `Class`. Instancetype is true for instancetype.
+// An Object always appears as a Pointer element.
 type Object struct {
 	Base         *Class
 	Meta         bool
 	Instancetype bool
-	Args         []Type      // §5.5's type arguments
-	Protocols    []*Protocol // §4.3's protocol qualifiers
+	Args         []Type      // type arguments (§5.5)
+	Protocols    []*Protocol // protocol qualifiers (§4.3)
 }
 
 func (*Object) Kind() Kind { return ObjectKind }
 
-// Block is a block pointer type (§5.7): a pointer to a closure with the
-// given signature.
-//
-// It is not a Pointer to a Func. A block pointer may not be dereferenced,
-// it carries captured state, and it is an object — a block assigns to `id`
-// and is retained and released like any other. A model that read it as a
-// function pointer would have to make three exceptions to say so.
+// Block is a block pointer type (§5.7).
 type Block struct{ Sig *Func }
 
 func (*Block) Kind() Kind { return BlockKind }
 
-// Visibility is §4.5's instance-variable visibility.
+// Visibility is instance-variable visibility (§4.5).
 type Visibility uint8
 
 const (
-	// VisProtected is the default in a class interface; VisPrivate is the
-	// default in an implementation, an extension and a category. §4.5 makes
-	// the default depend on where the variable was written, so the parser's
-	// caller decides it and this records what it decided.
-	VisProtected Visibility = iota
-	VisPrivate
+	VisProtected Visibility = iota // default in class interface
+	VisPrivate                     // default in implementation/extension/category
 	VisPublic
 	VisPackage
 )
@@ -184,55 +120,26 @@ func (v Visibility) String() string {
 
 // Ivar is one instance variable.
 type Ivar struct {
-	Name     string
-	Type     Type
-	Vis      Visibility
-	BitField bool
-	Width    int64
-
-	// Synthesized marks an ivar the compiler created for a property rather
-	// than one the program wrote. It matters to a diagnostic — a name
-	// collision with one of these is the property's fault, not the
-	// programmer's — and to the runtime metadata, which emits both alike.
-	Synthesized bool
+	Name        string
+	Type        Type
+	Vis         Visibility
+	BitField    bool
+	Width       int64
+	Synthesized bool // compiler-synthesized for a property
 }
 
 // Method is a method's signature (§4.7).
-//
-// Sel is the selector as one string, colons included: `setObject:forKey:`,
-// `init`, `a::`. It is built once, here, because everything downstream keys
-// on it — the runtime's dispatch table, the analyzer's lookup, the
-// diagnostic that says a method is not found — and a selector assembled
-// twice is a selector that can differ.
 type Method struct {
-	Sel      string
-	Class    bool // written with '+'
-	Ret      Type
-	Params   []Param
-	Variadic bool
-
-	// Optional marks a protocol method under @optional. A class is not
-	// required to implement it, and a send to a type qualified by the
-	// protocol may find nothing at run time.
-	Optional bool
-
-	// FromProperty marks an accessor a @property implied rather than one
-	// the program wrote. §4.8 says a property declares its getter and its
-	// setter, and a class may also declare either outright — Apple does it
-	// to give an accessor an availability the property does not have — so
-	// the two are the same method declared twice and not a redeclaration.
-	FromProperty bool
-
-	// Designated is __attribute__((objc_designated_initializer)), which
-	// decides which initializers a subclass must override and which ones
-	// may only chain. Unavailable is __attribute__((unavailable)), which is
-	// how a class refuses an inherited initializer.
-	Designated  bool
-	Unavailable bool
-
-	// Owner names the class, category or protocol the method was declared
-	// in, for the diagnostic that has to say where the other one is.
-	Owner string
+	Sel          string // full selector string including colons
+	Class        bool   // true for class method (+)
+	Ret          Type
+	Params       []Param
+	Variadic     bool
+	Optional     bool   // protocol method under @optional
+	FromProperty bool   // accessor synthesized or declared for a @property
+	Designated   bool   // __attribute__((objc_designated_initializer))
+	Unavailable  bool   // __attribute__((unavailable))
+	Owner        string // enclosing class, category, or protocol
 }
 
 // String renders a method the way the language writes one, which is what a
@@ -264,8 +171,7 @@ func (m *Method) String() string {
 	return b.String()
 }
 
-// PropertyAttr is the attribute set of §4.8, as a bitset: the attributes are
-// independent, and a property carries several.
+// PropertyAttr represents property attributes (§4.8) as a bitset.
 type PropertyAttr uint32
 
 const (
@@ -291,38 +197,20 @@ const (
 
 // Property is a declared property (§4.8).
 type Property struct {
-	Name  string
-	Type  Type
-	Attrs PropertyAttr
-
-	// Getter and Setter are the selectors the property is accessed
-	// through — the ones `getter=` and `setter=` named, or the default
-	// `name` and `setName:`. They are stored rather than derived because a
-	// property with an explicit getter has no other record of it, and
-	// because dot syntax resolves to exactly these.
-	Getter string
-	Setter string
-
-	// Ivar is the instance variable backing the property, named by
-	// @synthesize or defaulted to _name. It is empty for a @dynamic
-	// property, which promises the accessors exist and provides none.
-	Ivar    string
+	Name    string
+	Type    Type
+	Attrs   PropertyAttr
+	Getter  string // getter selector
+	Setter  string // setter selector
+	Ivar    string // backing ivar name (empty for @dynamic)
 	Dynamic bool
-
-	Owner string
+	Owner   string
 }
 
 // Has reports whether the property carries an attribute.
 func (p *Property) Has(a PropertyAttr) bool { return p.Attrs&a != 0 }
 
-// SelectorRecord is the tag of the structure SEL points at.
-//
-// <objc/objc.h> declares `typedef struct objc_selector *SEL;`, so a selector
-// is a pointer to an incomplete record and nothing about its shape says what
-// it is. The tag is what says it — the header has said so since 1988, no
-// program may define another structure by that name, and the runtime's own
-// type encoding gives it a letter of its own. Recognizing the tag here is
-// what lets everything downstream tell a SEL from any other pointer.
+// SelectorRecord is the tag of the struct SEL points at.
 const SelectorRecord = "objc_selector"
 
 // NewSelector returns the type SEL names.
@@ -359,9 +247,7 @@ func Instancetype() Type { return &Pointer{Elem: &Object{Instancetype: true}} }
 
 // ---- predicates ----
 
-// AsObject returns the Object a pointer points at, or nil. It is the test
-// for "is this an object pointer", and it is the one every Objective-C rule
-// starts with.
+// AsObject returns the Object a pointer points at, or nil.
 func AsObject(t Type) *Object {
 	p, ok := Unqualify(t).(*Pointer)
 	if !ok {
@@ -383,16 +269,12 @@ func AsBlock(t Type) *Block {
 // IsBlock reports whether t is a block pointer.
 func IsBlock(t Type) bool { return Unqualify(t).Kind() == BlockKind }
 
-// IsObjCObject reports whether a value of t is something the runtime
-// retains and releases: an object pointer, a block, or a generic type
-// parameter, which is erased to an object pointer and behaves as one
-// everywhere a value of it is used.
+// IsObjCObject reports whether a value of t is an object pointer, block, or type parameter.
 func IsObjCObject(t Type) bool {
 	return IsObjectPointer(t) || IsBlock(t) || AsTypeParam(t) != nil
 }
 
-// IsID reports whether t is `id` — an object pointer naming no class,
-// carrying no protocols.
+// IsID reports whether t is `id`.
 func IsID(t Type) bool {
 	o := AsObject(t)
 	return o != nil && o.Base == nil && !o.Meta && len(o.Protocols) == 0
@@ -450,12 +332,7 @@ func conformsAny(list []*Protocol, p *Protocol) bool {
 	return false
 }
 
-// Conforms reports whether an object type satisfies a protocol: because its
-// class adopts it, or because the type was qualified by it.
-//
-// `id<NSCopying>` conforms to NSCopying with no class involved at all, which
-// is the whole point of a qualified id: the protocol is the only thing known
-// about the value.
+// Conforms reports whether an object type satisfies a protocol.
 func (o *Object) Conforms(p *Protocol) bool {
 	if conformsAny(o.Protocols, p) {
 		return true

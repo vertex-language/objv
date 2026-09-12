@@ -69,16 +69,7 @@ func (p *parser) parseDeclOrFunc(lo token.Pos, attrs []*ast.Attr) ast.Decl {
 			Span: ast.Span{Lo: attrs[0].Pos(), Hi: attrs[len(attrs)-1].End()}, Attrs: attrs,
 		}}, specs...)
 	}
-	// An @interface behind an export macro. Apple's own root class is
-	// declared as
-	//
-	//	OBJC_ROOT_CLASS OBJC_EXPORT @interface NSObject <NSObject>
-	//
-	// where OBJC_EXPORT is `extern __attribute__((visibility("default")))`,
-	// so what precedes the @ is a whole declaration-specifier list and not
-	// only the attribute sequence §4.1 admits. clang accepts it and drops
-	// the storage class, which is the only thing to do: a class has no
-	// linkage of its own to give one to.
+	// Handle export macros preceding an @interface (e.g. OBJC_EXPORT @interface ...).
 	switch p.kind() {
 	case token.AT_INTERFACE, token.AT_PROTOCOL, token.AT_IMPLEMENTATION:
 		return p.parseObjCDecl(lo, append(attrs, attrsOfSpecs(specs)...))
@@ -101,10 +92,7 @@ func (p *parser) parseDeclOrFunc(lo token.Pos, attrs []*ast.Attr) ast.Decl {
 	return p.finishGenDecl(lo, specs, d)
 }
 
-// attrsOfSpecs is the attributes a declaration-specifier list carried, for
-// the one place a list turns out to have been a prelude to an @interface.
-// Everything else in it — the storage class, a stray type specifier — is
-// dropped, because a class declaration has nowhere to put it.
+// attrsOfSpecs extracts attributes from a declaration specifier list.
 func attrsOfSpecs(specs ast.DeclSpecs) []*ast.Attr {
 	var out []*ast.Attr
 	for _, s := range specs {
@@ -246,20 +234,7 @@ func (p *parser) skipDirectiveLine() {
 	}
 }
 
-// readPragma acts on the pragmas phase 7 owns.
-//
-// There is one: `#pragma pack`, which sets a ceiling on every member
-// alignment in the structures declared after it. Everything else is passed
-// over — a pragma the compiler does not implement is not an error, and the
-// scanner already said one reached here.
-//
-// The forms are Microsoft's, which gcc and clang both adopted:
-//
-//	#pragma pack(N)          set the ceiling to N
-//	#pragma pack()           remove it
-//	#pragma pack(push, N)    remember the current one and set N
-//	#pragma pack(push)       remember it and keep it
-//	#pragma pack(pop)        restore the last remembered one
+// readPragma handles #pragma pack directives: pack(N), pack(), pack(push[, N]), pack(pop).
 func (p *parser) readPragma(line []token.Token) {
 	// line is `#` `pragma` `pack` `(` ... `)`.
 	if len(line) < 3 || !p.tokIs(line[1], "pragma") || !p.tokIs(line[2], "pack") {
@@ -1127,17 +1102,13 @@ func (p *parser) parseQualList() ast.DeclSpecs {
 			token.AUTORELEASING, token.NONNULL, token.NULLABLE,
 			token.NULL_UNSPECIFIED:
 			out = append(out, p.keywordSpec())
+		case token.BLOCK:
+			// __block written after the caret in a block pointer declarator.
+			out = append(out, p.keywordSpec())
 		case token.PTRAUTH:
 			out = append(out, p.parsePtrauth())
 		case token.ATTRIBUTE:
-			// §5.7 puts an AttributeSpecifierList after a pointer's
-			// qualifiers, and CoreFoundation's headers use it:
-			//
-			//	SecKeyRef * __nonnull CF_RETURNS_RETAINED key
-			//
-			// where CF_RETURNS_RETAINED is __attribute__((cf_returns_retained)).
-			// It belongs to the pointer, beside the qualifiers it stands
-			// among.
+			// Attributes placed after pointer qualifiers (e.g. CF_RETURNS_RETAINED).
 			attrs := p.parseAttrSpecList()
 			if len(attrs) == 0 {
 				return out

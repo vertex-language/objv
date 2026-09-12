@@ -5,57 +5,19 @@ import (
 	"github.com/vertex-language/objv/token"
 )
 
-// Which definitions this unit emits.
-//
-// Not every function definition a translation unit contains is one it owes an
-// object file. Three kinds are conditional, and Darwin's headers are full of
-// all three:
-//
-//   - a *static* function. Internal linkage means no other unit can name one,
-//     so a definition nothing here mentions is a definition nothing can call.
-//
-//   - a C99 *inline definition* — inline everywhere in the unit, extern
-//     nowhere. §6.7.4p7 says it provides no external definition, so a call to
-//     it is a reference another unit satisfies.
-//
-//   - `extern inline` carrying gnu_inline, which is gcc 89's inline and means
-//     the opposite of C99's: no external definition either. Darwin's
-//     <sys/cdefs.h> spells __header_inline exactly that way.
-//
-// Emitting all of them is what a first version does, and it does not work.
-// Apple's <math.h> defines __inline_isfinitef in terms of __builtin_fabsf,
-// and <objc/objc.h> defines four more; a unit that emits every definition it
-// read therefore lowers functions it never called, in terms of builtins no
-// compiler here implements. `#import <Foundation/Foundation.h>` brings in
-// dozens.
-//
-// The rule that works is the one every compiler applies to `static inline`:
-// emit a definition when this unit uses it, and not otherwise.
-//
-// All three kinds go in one closure because they reach each other — a static
-// function called only from an inline definition is emitted exactly when that
-// definition is, and neither answer can be given without the other.
-//
-// Usage is computed over the syntax rather than over the lowered module,
-// because the decision has to be made before a body is walked. It is
-// deliberately conservative: any mention of the name counts, including an
-// address taken rather than a call.
+// Computes which conditionally-emitted function definitions (static functions,
+// C99 inline definitions, and gnu_inline functions) are used and should be emitted.
+// Definitions not reachable from roots in the translation unit are omitted.
 
 // useSet is the set of definition names this unit will emit.
 type useSet map[string]bool
 
-// planUsed computes the closure. The result is always a real set, never nil,
-// so a caller can index it without asking.
+// planUsed computes the set of conditionally-emitted functions used in this unit.
 func (u *unit) planUsed() useSet {
-	// Every definition whose emission depends on being used, by name.
-	// Keyed by the name the definition is *emitted* under, not the name the
-	// source wrote: an overloaded name is several functions, and a use of
-	// one is not a use of its siblings. Keying by the source name made
-	// `which(7)` emit the overload taking a simd_float4 as well, which is
-	// how a program that never mentions a vector came to be refused for
-	// holding one. See overload.go.
+	// Keyed by emitted link name (to distinguish overloaded functions).
+	// Collected over fileScope() to include static helper functions defined inside @implementation.
 	bodies := make(map[string]*ast.FuncDecl)
-	for _, d := range u.file.Decls {
+	for _, d := range u.fileScope() {
 		fd, ok := d.(*ast.FuncDecl)
 		if !ok || fd.Body == nil || fd.Name == nil {
 			continue
@@ -75,7 +37,7 @@ func (u *unit) planUsed() useSet {
 	for _, d := range u.file.Decls {
 		switch d := d.(type) {
 		case *ast.FuncDecl:
-			if d.Body == nil || d.Name == nil || bodies[u.name(d.Name)] != nil {
+			if d.Body == nil || d.Name == nil || bodies[u.linkName(d.Name.Name(u.src), d)] != nil {
 				continue
 			}
 			work = append(work, u.mentions(d.Body, bodies)...)
@@ -93,13 +55,9 @@ func (u *unit) planUsed() useSet {
 				}
 			}
 		case *ast.ClassImplDecl:
-			for _, m := range d.Members {
-				work = append(work, u.mentions(m, bodies)...)
-			}
+			work = append(work, u.implRoots(d.Members, bodies)...)
 		case *ast.CategoryImplDecl:
-			for _, m := range d.Members {
-				work = append(work, u.mentions(m, bodies)...)
-			}
+			work = append(work, u.implRoots(d.Members, bodies)...)
 		}
 	}
 
@@ -125,6 +83,20 @@ func (u *unit) planUsed() useSet {
 		work = append(work, u.mentions(bodies[name].Body, bodies)...)
 	}
 	return used
+}
+
+// implRoots collects names mentioned by @implementation members (methods are roots,
+// while nested function definitions are conditionally emitted).
+func (u *unit) implRoots(members []ast.Decl, bodies map[string]*ast.FuncDecl) []string {
+	var out []string
+	for _, m := range members {
+		if fd, ok := m.(*ast.FuncDecl); ok && fd.Body != nil && fd.Name != nil &&
+			bodies[u.linkName(u.name(fd.Name), fd)] != nil {
+			continue
+		}
+		out = append(out, u.mentions(m, bodies)...)
+	}
+	return out
 }
 
 // mentions is every name in bodies that appears anywhere in n.

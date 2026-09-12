@@ -1,10 +1,4 @@
 // Command objv is the Vertex Objective-C compiler.
-//
-// It has nothing of its own: everything it does is cli.Run, which is a
-// wrapper over the objv package, which is the phases composed. Three lines
-// here rather than none because a command is a module's entry point and a
-// library is not, and keeping them apart is what lets a program embed the
-// compiler without embedding the command.
 package main
 
 import (

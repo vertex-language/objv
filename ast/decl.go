@@ -2,30 +2,17 @@ package ast
 
 import "github.com/vertex-language/objv/token"
 
-// DeclSpecs is a declaration-specifier list in written order — `int static
-// const x;` is valid, deprecated placement and all. Constraint checking
-// (specifier multisets, at most one storage class) is the type-building
-// phase's job.
+// DeclSpecs is a declaration-specifier list in written order.
 type DeclSpecs []Expr
 
-// KeywordSpec is any single-keyword specifier or qualifier: a storage class,
-// a builtin type specifier, const/restrict/volatile, _Atomic as a qualifier,
-// inline, _Noreturn — and Objective-C's own, which are the reason this node
-// carries a Kind rather than being several nodes: __block, __kindof, the four
-// ownership qualifiers, and the nullability qualifiers.
-//
-// The nullability qualifiers have an underscore-free spelling too (§5.6),
-// valid only inside a MethodType and in a property attribute list. Those lex
-// as identifiers, so the parser resolves them by position and stores the kind
-// they mean — `nullable` in a method type is NULLABLE here, exactly as
-// _Nullable is, because they are the same qualifier.
+// KeywordSpec represents a single keyword specifier or qualifier (storage class,
+// basic type, C qualifier, ARC ownership, or nullability).
 type KeywordSpec struct {
 	Span
 	Kind token.Kind
 }
 
-// AlignasSpec is _Alignas(TypeName) or _Alignas(ConstantExpression): exactly
-// one of Type and X is non-nil.
+// AlignasSpec is _Alignas(TypeName) or _Alignas(ConstantExpression).
 type AlignasSpec struct {
 	Span
 	Alignas token.Pos
@@ -35,13 +22,7 @@ type AlignasSpec struct {
 	Rparen  token.Pos
 }
 
-// TypeofType is §5.3's typeof: a type specifier naming the type of an
-// expression, or of a type name. Exactly one of Type and X is non-nil.
-//
-// It is here rather than tolerated because Objective-C code cannot be read
-// without it: the weak/strong dance around a captured self is written
-// `__strong __typeof__(weakSelf) strongSelf = weakSelf;` and has no other
-// spelling.
+// TypeofType represents typeof(expr) or typeof(type) (§5.3).
 type TypeofType struct {
 	Span
 	Keyword token.Pos
@@ -73,14 +54,8 @@ type PtrauthSpec struct {
 	Rparen  token.Pos
 }
 
-// ObjectType is §5.4's ObjectTypeSpecifier: `id`, `Class`, `instancetype`, a
-// class name, or a type parameter's name, each optionally qualified.
-//
-// It is not TypedefType even though `id` and `Class` are typedef names from
-// <objc/objc.h>, because only these accept the two angle-bracket lists:
-// `id<NSCopying>`, `NSArray<NSString *> *`, `NSArray<NSString *><NSCopying>`.
-// Which of the five a bare identifier is takes lookup, which is the parser's;
-// Kind records the answer so nothing below has to ask again.
+// ObjectType is §5.4's ObjectTypeSpecifier: `id`, `Class`, `instancetype`,
+// a class name, or a type parameter name, with optional type arguments or protocol qualifiers.
 type ObjectType struct {
 	Span
 	Kind      ObjectKind
@@ -116,12 +91,7 @@ func (k ObjectKind) String() string {
 	return "ObjectKind(?)"
 }
 
-// ProtocolRefList is §4.3's `< ProtocolList >`: the protocols a type or a
-// declaration conforms to.
-//
-// It is a node rather than a bare slice because the angle brackets are
-// positions a diagnostic points at, and because a list is distinguishable
-// from its absence: `id` and `id<>` are not the same text.
+// ProtocolRefList is `< ProtocolList >` (§4.3): adopted or qualifying protocols.
 type ProtocolRefList struct {
 	Span
 	Langle token.Pos
@@ -129,12 +99,7 @@ type ProtocolRefList struct {
 	Rangle token.Pos
 }
 
-// TypeArgList is §5.5's `< TypeName {, TypeName} >`: the arguments to a
-// generic class.
-//
-// A list of identifiers between angle brackets is ambiguous with a
-// ProtocolRefList and is resolved by looking each name up (§4.1); by the time
-// one of these exists, that resolution has happened.
+// TypeArgList is `< TypeName {, TypeName} >` (§5.5): generic type arguments.
 type TypeArgList struct {
 	Span
 	Langle token.Pos
@@ -164,42 +129,18 @@ type TypeParam struct {
 	Bound       *TypeName
 }
 
-// StructType is a struct-or-union specifier; Kind is STRUCT or UNION. Fields
-// is nil for the incomplete form (no brace list); each member is a *FieldDecl
-// or a *StaticAssertDecl.
-//
-// Defs is §5.8's third alternative, `struct { @defs(ClassName) }`, which
-// yields a class's instance-variable layout as structure members. It is
-// supported only under the legacy runtime, which objv does not target, so it
-// parses here and is rejected by diagnosis — the parse exists so the
-// diagnostic can say what it is rather than that a brace was unexpected.
+// StructType represents a struct or union specifier.
 type StructType struct {
 	Span
 	Keyword token.Pos
 	Kind    token.Kind // STRUCT or UNION
 	Name    *Ident     // nil for anonymous
-	Lbrace  token.Pos  // NoPos for the incomplete form
+	Lbrace  token.Pos  // NoPos for incomplete form
 	Fields  []Decl
 	Defs    *DefsSpec
 	Rbrace  token.Pos
-
-	// Attrs are the attributes written on the specifier itself, in either
-	// position §5.9 admits: between the keyword and the tag, and after the
-	// closing brace. They belong to the type rather than to a declaration of
-	// it, which is what makes `struct __attribute__((packed)) s` packed
-	// everywhere s is named.
-	Attrs []*Attr
-
-	// Pack is the alignment ceiling `#pragma pack` had in force where this
-	// specifier was written, or zero where there was none.
-	//
-	// It is recorded on the node rather than looked up later because the
-	// pragma is positional: it is a property of the point in the file the
-	// struct was declared at, and nothing about the struct itself says
-	// which region it fell in. Apple's <mach/message.h> wraps three hundred
-	// lines in `#pragma pack(push, 4)`, and every message trailer in it has
-	// a size that is wrong without this.
-	Pack int64
+	Attrs   []*Attr
+	Pack    int64 // #pragma pack alignment ceiling in force, or 0
 }
 
 // DefsSpec is `@defs ( ClassName )`.
@@ -211,50 +152,25 @@ type DefsSpec struct {
 	Rparen  token.Pos
 }
 
-// Attr is one entry of an attribute list, in either spelling of §5.9:
-// __attribute__((…)) or [[…]].
-//
-// The name is kept as written, both spellings: every attribute may be written
-// with two leading and two trailing underscores, so that a macro named
-// `packed` cannot break a header that says `__packed__`. Scope is the first
-// half of a scoped name, `clang::` in `[[clang::objc_arc]]`, and is nil
-// otherwise.
-//
-// Args are tokens, not expressions, because §5.9 says BalancedTokenSequence
-// and means it: `availability(macosx, introduced=10.12.1)` parses as no
-// expression, and it is on nearly every declaration in the SDK. An attribute
-// that wants a value reads it back out of the tokens.
+// Attr is an attribute (__attribute__((…)) or [[…]]).
 type Attr struct {
 	Span
-	Scope  *Ident // nil unless a scoped name
+	Scope  *Ident // nil unless scoped (e.g. clang::)
 	Colons token.Pos
 	Name   *Ident
-	Lparen token.Pos // NoPos when the attribute takes no arguments
+	Lparen token.Pos // NoPos when no arguments
 	Args   *Tokens
 	Rparen token.Pos
 }
 
-// AttrSpec carries the attributes written among a declaration's specifiers,
-// or in one of §4.7's three method positions. It is an Expr because DeclSpecs
-// is a list of them; it specifies nothing on its own.
-//
-// Bracketed records the [[…]] spelling, which matters only to a formatter:
-// the two spellings mean the same thing and differ in where they may appear.
+// AttrSpec wraps attributes in a declaration specifier list or method signature.
 type AttrSpec struct {
 	Span
 	Bracketed bool
 	Attrs     []*Attr
 }
 
-// EnumDecl is an enum specifier. It sits in specifier position but is named
-// for what it does: declare constants. Comma records a trailing comma (NoPos
-// if absent); List is nil for the incomplete form.
-//
-// Base is §5.8's fixed underlying type, the `: NSInteger` of
-// `enum Foo : NSInteger`. It is not a nicety: NS_ENUM expands to a bodyless
-// specifier carrying one, and every enumeration in the Cocoa headers is
-// written with it. A fixed underlying type completes the type at the
-// specifier and decides how a value of it is boxed (§6.8).
+// EnumDecl represents an enum specifier with optional fixed underlying type (: Base).
 type EnumDecl struct {
 	Span
 	Enum   token.Pos
@@ -326,42 +242,23 @@ type GenDecl struct {
 }
 
 // InitDeclarator is Declarator [= Initializer].
-//
-// AsmLabel is the `__asm("_name")` written after a declarator: it renames the
-// symbol and nothing else — the object keeps its name, type and linkage, and
-// only what the linker sees changes. The grammar of §5.7 does not list it,
-// but Darwin's <sys/cdefs.h> defines __DARWIN_ALIAS with it and applies it to
-// most of libc, so a compiler that cannot read one cannot read <stdio.h>.
 type InitDeclarator struct {
 	Span
 	Decl     Declarator
-	AsmLabel *StringLit
-	// Attrs are the attributes written on this declarator rather than in the
-	// declaration's specifiers. `int a __attribute__((aligned(16))), b;`
-	// aligns a and not b, which is why they are here and not there.
-	Attrs  []*Attr
-	Assign token.Pos // NoPos when no initializer
-	Init   Expr      // expression or *InitList
+	AsmLabel *StringLit // __asm("_name") symbol rename
+	Attrs    []*Attr    // attributes on this declarator
+	Assign   token.Pos  // NoPos when no initializer
+	Init     Expr       // expression or *InitList
 }
 
-// FuncDecl is a function definition:
-// DeclarationSpecifiers Declarator [DeclarationList] CompoundStatement.
-// KR holds the declaration list of a K&R definition, kept whole.
-//
-// Name aliases the identifier inside Decl — the same node, not a copy — so
-// Walk skips it.
+// FuncDecl represents a function definition.
 type FuncDecl struct {
 	Span
-	Specs DeclSpecs
-	Decl  Declarator
-	// Attrs are the attributes written between the declarator and the body,
-	// the `void f(void) __attribute__((constructor)) { … }` spelling. They
-	// are kept apart from Specs for the same reason InitDeclarator keeps
-	// its own: an attribute after the declarator is on this function, and
-	// one among the specifiers is on the declaration.
-	Attrs    []*Attr
+	Specs    DeclSpecs
+	Decl     Declarator
+	Attrs    []*Attr // attributes after declarator
 	AsmLabel *StringLit
-	Name     *Ident `ast:"-"` // alias into Decl; never nil in a valid definition
+	Name     *Ident `ast:"-"` // alias into Decl; never nil in valid definition
 	KR       []*GenDecl
 	Body     *CompoundStmt
 }

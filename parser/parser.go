@@ -1,29 +1,6 @@
-// Package parser turns a *token.File into an *ast.File plus a sorted
-// diagnostic slice.
-//
-// Recursive descent for declarations, statements and the Objective-C
-// constructs; precedence climbing for expressions; and one name table
-// instead of any rollback machinery — the grammar's ambiguities are all
-// resolved by what a name means, and a parser that knows what names mean
-// needs no backtracking.
-//
-// There are three such ambiguities, and docs/objc_grammar.md names all
-// three:
-//
-//   - `(T) - x` is a cast if T is a type name and a subtraction otherwise
-//     (§6.5);
-//   - `Foo<Bar>` is a generic specialization if Bar is a type and a protocol
-//     conformance if Bar is a protocol (§4.1, §5.5);
-//   - `[a b]` is a message send, and `a[b]` a subscript, distinguished by
-//     where the bracket is rather than by what is in it (§6.2, §6.3).
-//
-// The parser interprets nothing else. It decides which production applies
-// and where each node begins and ends; it does not decode literals, resolve
-// selectors, or check constraints beyond the production admitting the
-// tokens.
-//
-// A partial parse is a usable one: every entry point returns a node — a Bad*
-// placeholder if it must — so consumers read a tree, not a success flag.
+// Package parser turns a *token.File into an *ast.File and diagnostics.
+// It uses recursive descent for declarations and statements, and precedence climbing
+// for expressions, disambiguating grammar constructs using a lexical scope table.
 package parser
 
 import (
@@ -34,18 +11,15 @@ import (
 	"github.com/vertex-language/objv/token"
 )
 
-// Mode controls optional parser behavior.
+// Mode controls parser behavior.
 type Mode uint
 
 const (
 	// ParseComments retains comment tokens on the File.
 	ParseComments Mode = 1 << iota
-	// SkipBodies skips function and method bodies balanced, not parsed —
-	// declarations, prototypes, typedefs and every @interface still land. A
-	// fast structural pass, which is what an index wants.
+	// SkipBodies skips function and method bodies without parsing their statements.
 	SkipBodies
-	// Tolerant keeps going past the resync budget. For editors; wasteful in
-	// batch builds.
+	// Tolerant continues parsing past the normal error recovery budget.
 	Tolerant
 )
 
@@ -128,53 +102,17 @@ type parser struct {
 
 	scopes []map[string]nameKind
 
-	// protocolNames is the protocol namespace, which is flat and separate
-	// from every other: see declareGlobal.
-	protocolNames map[string]bool
-
-	// classParams remembers each generic class's type parameter names, so
-	// that an @implementation — which §4.1 gives no parameter list of its
-	// own — can put them back in scope for the methods it defines.
-	classParams map[string][]string
-
-	// asmLabel is the most recent `__asm("name")` a declarator suffix
-	// consumed. It lives here because it is read deep inside
-	// parseDeclarator and only the two callers that build a declaration
-	// have anywhere to put it.
-	asmLabel *ast.StringLit
-
-	// declAttrs is the attribute list a declarator suffix consumed, for the
-	// reason asmLabel is here. §5.7 puts an AttributeSpecifierList after a
-	// declarator, and NS_RETURNS_INNER_POINTER and kin land there.
-	declAttrs []*ast.Attr
-
-	// inMethodType is set while a MethodType's parentheses are open, which
-	// is where §5.6's underscore-free nullability spellings mean the
-	// qualifier rather than an identifier.
-	inMethodType bool
-
-	// pack is `#pragma pack`'s alignment ceiling here, and packStack is
-	// what push and pop move it through. Zero is "no ceiling".
-	//
-	// The pragma is in the parser and not in phase 4 because it is not a
-	// phase-4 idea: it changes what a later declaration *means*, not what
-	// tokens come out, which is why the preprocessor passes it through
-	// rather than acting on it.
-	pack      int64
-	packStack []int64
-
-	// classScopes are the depths at which an @interface, @implementation or
-	// @protocol opened a scope. Such a scope exists for the class's type
-	// parameters and for nothing else; see declareDeclarator.
-	classScopes []int
+	protocolNames map[string]bool      // flat protocol namespace
+	classParams   map[string][]string  // generic class type parameters
+	asmLabel      *ast.StringLit       // __asm("name") declarator suffix
+	declAttrs     []*ast.Attr          // attribute list after declarator
+	inMethodType  bool                 // true inside method return/param type parens
+	pack          int64                // #pragma pack alignment ceiling (0 for none)
+	packStack     []int64
+	classScopes   []int                // scope depth stack for class/protocol scopes
 }
 
 // ---- names ----
-//
-// A name means one of five things, and which one decides how the tokens
-// after it parse. The table follows scope exactly, including immediate
-// visibility after a declarator: names are declared before their
-// initializers parse.
 
 type nameKind uint8
 
@@ -195,8 +133,7 @@ func (p *parser) declare(name string, k nameKind) {
 	}
 }
 
-// pushClassScope opens the scope an @interface, @implementation or @protocol
-// reads its type parameters and members in.
+// pushClassScope opens a scope for class/protocol type parameters and members.
 func (p *parser) pushClassScope() {
 	p.pushScope()
 	p.classScopes = append(p.classScopes, len(p.scopes))
@@ -209,28 +146,17 @@ func (p *parser) popClassScope() {
 	p.popScope()
 }
 
-// inClassScope reports whether the innermost scope is one a class opened —
-// which is where a C declaration is a file-scope declaration standing in a
-// class's braces, and not a local one.
+// inClassScope reports whether the innermost scope is a class scope.
 func (p *parser) inClassScope() bool {
 	n := len(p.classScopes)
 	return n > 0 && p.classScopes[n-1] == len(p.scopes)
 }
 
-// declareGlobal enters a name at file scope from wherever the parser is.
-// Classes and protocols are file-scope things however deeply nested the
-// declaration that mentions them: `@class Forward;` inside an
-// @implementation still names a class for the rest of the unit.
+// declareGlobal enters a name at file scope. Protocols use their own namespace.
 func (p *parser) declareGlobal(name string, k nameKind) {
 	if name == "" {
 		return
 	}
-	// A protocol name lives in a namespace of its own, and it is flat: §4.4
-	// makes `@protocol NSObject` and `@interface NSObject` two different
-	// things with one name, which is not a corner — it is what the root
-	// class of every Objective-C program is. Keeping protocols in the scope
-	// table would let the class declaration erase the protocol, and then
-	// `@interface NSObject <NSObject>` reads as a type parameter list.
 	if k == nameProtocol {
 		p.protocolNames[name] = true
 		return
@@ -247,28 +173,13 @@ func (p *parser) lookup(name string) nameKind {
 	return nameOrdinary
 }
 
-// declarePredeclared enters the names §2.2 says are implicitly available in
-// every Objective-C translation unit.
-//
-// They are typedefs in <objc/objc.h> and a forward-declared class, and a
-// real translation unit imports that header — but a parser that only knows
-// them when the header was read cannot parse a fragment, and every one of
-// them is spelled in a way no program may redefine. Declaring them costs
-// nothing and makes `- (id)init;` parse in a file with no imports.
+// declarePredeclared registers builtin types and Objective-C typedefs.
 func (p *parser) declarePredeclared() {
 	for _, n := range []string{"id", "Class", "SEL", "IMP", "BOOL", "instancetype"} {
 		p.declare(n, nameTypedef)
 	}
 	p.declare("Protocol", nameClass)
-
-	// __builtin_va_list is the compiler's, not a header's: Apple's
-	// <sys/_types/_va_list.h> typedefs va_list from it and declares it
-	// nowhere, because gcc and clang both provide it as a built-in type
-	// name. A compiler that did not would fail on the first <stdio.h>.
 	p.declare("__builtin_va_list", nameTypedef)
-
-	// clang's two 128-bit typedefs, which it predefines and no header
-	// declares. Apple's <mach/arm/_structs.h> uses them.
 	p.declare("__int128_t", nameTypedef)
 	p.declare("__uint128_t", nameTypedef)
 }
@@ -357,11 +268,7 @@ func isName(t token.Token) bool {
 	return t.Kind == token.IDENT || t.Kind.IsKeyword()
 }
 
-// isSelector is isName minus __attribute__, which §4.7 excludes from
-// Selector — so that an attribute written in one of the three positions a
-// method admits is not read as a unary selector. Without the exclusion
-// `- (instancetype)init NS_DESIGNATED_INITIALIZER;` would parse as a method
-// named init taking an attribute.
+// isSelector reports whether t is a valid selector piece (isName excluding __attribute__).
 func isSelector(t token.Token) bool {
 	return isName(t) && t.Kind != token.ATTRIBUTE
 }

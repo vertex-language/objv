@@ -1,14 +1,7 @@
 package types
 
-// Model is a target's type model: sizes in bytes, char signedness, wchar_t's
-// identity. Layout (Sizeof, Alignof, field offsets) is a pure function of the
-// Model — nothing here probes a host.
-//
-// Every Objective-C addition is a pointer: an object pointer and a block
-// pointer are both SizePtr, which is why none of them appears here. What a
-// class costs is the runtime's question, not the model's — instance
-// variables are non-fragile, so their offsets are decided when the program
-// is loaded rather than when it is compiled.
+// Model defines a target's type model (sizes, alignments, signedness).
+// Layout (Sizeof, Alignof, field offsets) is determined purely by the Model.
 type Model struct {
 	CharSigned bool
 	WCharKind  Kind // the basic kind wchar_t aliases
@@ -18,61 +11,20 @@ type Model struct {
 	SizeFloat, SizeDouble, SizeLongDouble      int64
 	AlignLongDouble                            int64
 
-	// MaxVectorAlign is the widest alignment a vector type asks for: the
-	// width of a vector register, because a vector longer than one is held
-	// in several and each of those is what the machine loads. Every target
-	// objv emits for has 16-byte vector registers — NEON's Q and SSE's
-	// XMM — so a simd_float16 is sixty-four bytes aligned to sixteen.
+	// MaxVectorAlign is the maximum vector alignment (register width, typically 16 bytes).
 	MaxVectorAlign int64
 
-	// MSBitfields selects the Microsoft rule for where a bit-field goes.
-	//
-	// §6.7.2.1p11 leaves it implementation-defined, and the two answers in
-	// circulation disagree about most structs rather than about a corner.
-	// Under the rule gcc and clang use, a bit-field is placed at the
-	// current bit as long as it does not cross a boundary of its declared
-	// type: `struct { char a; int b : 3; }` puts b in the byte after a and
-	// is four bytes. Under MSVC's, a bit-field opens a new allocation unit
-	// of its declared type unless the member before it was a bit-field of
-	// the same size with room left — so the same struct is eight bytes,
-	// with b at offset four.
-	//
-	// It is an ABI, not a preference: it decides what a struct means to
-	// everything else on the platform, so it belongs to the target and not
-	// to the compiler. Windows sets it; nothing else does.
+	// MSBitfields selects Microsoft bit-field layout rules (Windows ABI).
 	MSBitfields bool
 
-	// ObjCBoolIsBool says BOOL is `bool` rather than `signed char`.
-	//
-	// Apple's 64-bit ARM ABI made it a one-byte bool; the x86_64 Mac kept
-	// the signed char it shipped with, and so does every other target.
-	// clang says the same thing with useSignedCharForObjCBool and publishes
-	// it as __OBJC_BOOL_IS_BOOL, which <objc/objc.h> reads in preference to
-	// guessing from TARGET_OS_*.
-	//
-	// It is an ABI and not a preference: @encode(BOOL) is what a method
-	// list publishes and what an NSInvocation reads back, and "c" where
-	// every other object file says "B" is a disagreement the runtime acts
-	// on.
+	// ObjCBoolIsBool indicates BOOL is bool rather than signed char (arm64 Apple ABI).
 	ObjCBoolIsBool bool
 
-	// VaListSize is how many bytes an object of type __builtin_va_list
-	// occupies, and zero means one pointer.
-	//
-	// It is a target fact and not a language one, and the two answers are
-	// not variations on each other. Darwin's AArch64 gives every variadic
-	// argument one stack slot, so the list is a pointer at the next one;
-	// SysV x86-64 puts them in a register save area and the caller's
-	// outgoing area both, so the list is four fields saying where the walk
-	// has got to. The type is opaque either way — a program declares one,
-	// passes it and copies it, and only va_start and va_arg look inside.
+	// VaListSize is the byte size of __builtin_va_list (0 means pointer size).
 	VaListSize int64
 }
 
-// LP64 is the model of every target objv emits for: arm64 and x86-64 on
-// macOS, Linux and Windows all agree about the sizes that matter here, and
-// the one that does not — Windows' long — is a different model the objv
-// package supplies.
+// LP64 returns the standard 64-bit target type model.
 func LP64() Model {
 	return Model{
 		CharSigned: true,
@@ -199,14 +151,7 @@ func (m Model) Alignof(t Type) (int64, bool) {
 	return 0, false
 }
 
-// vectorSize is how much room a vector takes.
-//
-// Not the element count times the element: §clang rounds the count up to a
-// power of two and leaves the count alone, so a three-element vector of
-// floats occupies four of them. A machine has no three-lane register, and a
-// type whose size was twelve would be loaded and stored in pieces that do
-// not exist. `sizeof(simd_float3) == 16` is the rule every simd header is
-// written against.
+// vectorSize returns the storage size of a vector (rounded up to power of two).
 func (m Model) vectorSize(t *Vector) (int64, bool) {
 	e, ok := m.Sizeof(t.Elem)
 	if !ok || t.Len <= 0 {
@@ -219,19 +164,8 @@ func (m Model) vectorSize(t *Vector) (int64, bool) {
 	return e * n, true
 }
 
-// Offsetof is the byte offset of a member from the base of a record: what
-// offsetof(t, name) yields, and what the address constant &((t *)0)->name
-// evaluates to.
-//
-// The member may be reached through an anonymous struct or union, whose
-// members belong to the record that contains it (§6.7.2.1p13); the offsets
-// of each step add. A named member is searched for before the anonymous
-// ones are descended into, which is the rule that makes an outer member
-// shadow an inner one of the same name.
-//
-// It reports false for an incomplete record, a name no member carries, and
-// a bit-field — §6.7.2.1p13 gives a bit-field no address, so it has no
-// offset in bytes to give either.
+// Offsetof returns the byte offset of a member from the base of a record.
+// Returns false for incomplete records, non-existent members, or bit-fields.
 func (m Model) Offsetof(t Type, name string) (int64, bool) {
 	r, ok := Unqualify(t).(*Record)
 	if !ok || !r.Complete {
@@ -263,29 +197,12 @@ func (m Model) Offsetof(t Type, name string) (int64, bool) {
 	return 0, false
 }
 
-// layout computes a record's size and alignment, and — when offs is not nil
-// — writes each member's byte offset into it, in declaration order.
-//
-// Bit-fields pack into consecutive allocation units of their declared type,
-// System V–style: a field that would cross a unit boundary starts a new
-// unit, and a zero-width field pads to the next one.
-//
-// The offsets are Offsetof's, and a bit-field member's is left at zero:
-// Offsetof refuses a bit-field before it reads one, so nothing depends on
-// the value.
+// layout computes a record's size and alignment, and optional member byte offsets.
 func (m Model) layout(r *Record, offs []int64) (size, align int64, ok bool) {
 	return m.layoutWith(r, offs, nil)
 }
 
-// BitPlaces is where each of a record's members landed as a bit-field: the
-// allocation unit's byte offset, the field's first bit within it, and the
-// unit's width in bytes. A member that is not a bit-field has a zero place,
-// and FieldOffsets is what says where that one is.
-//
-// It exists because lower needs the placement and not merely the size: a
-// bit-field is read by loading its allocation unit and shifting, and both
-// numbers come from the same walk that decided how big the record is. Asking
-// the layout for them is the only way the two cannot disagree.
+// BitPlaces computes bit-field layout information for a record's fields.
 func (m Model) BitPlaces(t Type) ([]BitPlace, bool) {
 	r, ok := Unqualify(t).(*Record)
 	if !ok || !r.Complete {
@@ -430,12 +347,7 @@ func (m Model) IntMax(t Type) uint64 {
 	return 1<<bits - 1
 }
 
-// FieldOffsets is every member's byte offset, in declaration order.
-//
-// Offsetof answers by name, which is what offsetof(t, m) needs and what a
-// member access needs; an initializer needs to walk the members in order,
-// anonymous and unnamed ones included, and there is no name to ask about.
-// A bit-field's entry is zero, for the same reason Offsetof refuses one.
+// FieldOffsets returns every member's byte offset in declaration order.
 func (m Model) FieldOffsets(r *Record) ([]int64, bool) {
 	if r == nil || !r.Complete {
 		return nil, false

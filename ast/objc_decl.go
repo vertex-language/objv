@@ -2,19 +2,7 @@ package ast
 
 import "github.com/vertex-language/objv/token"
 
-// ClassInterfaceDecl is §4.1's @interface: the class's name, what it inherits
-// from, what it conforms to, its instance variables, and its members.
-//
-//	@interface Cache<KeyType> : NSObject <NSCopying> { … } … @end
-//
-// SuperArgs and Protocols are both angle-bracket lists after the superclass
-// and are told apart by resolving each name (§4.1): a protocol name makes a
-// ProtocolRefList, anything else a TypeArgList. Both may appear, in that
-// order.
-//
-// Attrs are the attributes written *before* @interface. §5.9 forbids them
-// between the keyword and the class name, which is why there is one field and
-// not two.
+// ClassInterfaceDecl represents an @interface declaration (§4.1).
 type ClassInterfaceDecl struct {
 	Span
 	Attrs      []*Attr
@@ -30,12 +18,7 @@ type ClassInterfaceDecl struct {
 	EndKeyword token.Pos // the @end
 }
 
-// ClassImplDecl is §4.1's @implementation.
-//
-// It takes neither a TypeParamList nor a TypeArgList: lightweight generics
-// are erased and exist only in the interface. Attributes are accepted before
-// it and have no effect there, so they are kept for a formatter and ignored
-// by everything else.
+// ClassImplDecl represents an @implementation declaration (§4.1).
 type ClassImplDecl struct {
 	Span
 	Attrs      []*Attr
@@ -48,16 +31,8 @@ type ClassImplDecl struct {
 	EndKeyword token.Pos // the @end
 }
 
-// CategoryDecl is §4.2's CategoryInterface, and its ClassExtension when Name
-// is nil.
-//
-//	@interface Cache (Persistence) <NSCoding> … @end   // a category
-//	@interface Cache () { … } … @end                   // a class extension
-//
-// The two are one node because they are one production with one part omitted,
-// and because what differs is what they may contain rather than how they are
-// written: an extension may declare instance variables and add to the class's
-// own interface, and a category may not. IsExtension says which.
+// CategoryDecl represents a category interface or class extension (§4.2).
+// When Name is nil, it is a class extension (@interface Foo ()).
 type CategoryDecl struct {
 	Span
 	Attrs      []*Attr
@@ -89,13 +64,7 @@ type CategoryImplDecl struct {
 	EndKeyword token.Pos // the @end
 }
 
-// ProtocolDecl is §4.3's @protocol declaration.
-//
-// Members holds the sections flattened into written order, with a
-// RequirementDecl standing where each @required or @optional was written. A
-// protocol's members default to required until the first marker, and each
-// marker holds until the next — state the analyzer carries as it walks, which
-// is also how it reports one written where §4.3 does not allow it.
+// ProtocolDecl represents an @protocol declaration (§4.3).
 type ProtocolDecl struct {
 	Span
 	Attrs      []*Attr
@@ -160,14 +129,7 @@ type ImportDecl struct {
 	Semi    token.Pos
 }
 
-// IvarList is §4.5's brace-enclosed instance variables.
-//
-// Items are *FieldDecl and *StaticAssertDecl in written order, with a
-// *VisibilityDecl standing where each @private, @protected, @public or
-// @package was written. Variables before the first marker take a default that
-// depends on the enclosing construct — @protected in a class interface,
-// @private in an implementation, extension or category — which is why the
-// default is not recorded here: this node does not know what encloses it.
+// IvarList represents brace-enclosed instance variables (§4.5).
 type IvarList struct {
 	Span
 	Lbrace token.Pos
@@ -182,25 +144,8 @@ type VisibilityDecl struct {
 	Kind    token.Kind // AT_PRIVATE, AT_PROTECTED, AT_PUBLIC, AT_PACKAGE
 }
 
-// MethodDecl is §4.7's method declaration and method definition: the same
-// node, with Body nil for a declaration and non-nil for a definition.
-//
-//   - (void)setObject:(id)obj forKey:(id<NSCopying>)key;
-//   - (instancetype)cacheWithCapacity:(NSUInteger)cap;
-//
-// Kind is SUB for an instance method and ADD for a class method, which is the
-// punctuator each is written with.
-//
-// A unary method fills Sel and leaves Parts empty; a keyword method fills
-// Parts and leaves Sel nil. Params and Ellipsis are §4.7's
-// MethodParameterSuffix, the C-style trailing parameters that make a method
-// variadic.
-//
-// Attributes appear in three positions on a method and are kept apart because
-// they attach to different things: Attrs before the selector, each
-// KeywordDecl's own between its type and its parameter name, and TailAttrs
-// after the complete selector — the position NS_DESIGNATED_INITIALIZER,
-// NS_SWIFT_NAME and the deprecation macros all use.
+// MethodDecl represents an Objective-C method declaration or definition (§4.7).
+// Body is nil for declarations and non-nil for definitions.
 type MethodDecl struct {
 	Span
 	Keyword   token.Pos
@@ -223,9 +168,7 @@ func (d *MethodDecl) IsDefinition() bool { return d.Body != nil }
 // IsClassMethod reports whether the method was written with '+'.
 func (d *MethodDecl) IsClassMethod() bool { return d.Kind == token.ADD }
 
-// KeywordDecl is one `[Selector] : [MethodType] [Attrs] Identifier` of a
-// keyword method's selector. Sel is nil where the piece has no name, which
-// makes `- (void)a::(int)x` a method named a::.
+// KeywordDecl is one `[Selector] : [MethodType] [Attrs] Identifier` of a keyword method.
 type KeywordDecl struct {
 	Span
 	Sel   *Ident
@@ -235,15 +178,7 @@ type KeywordDecl struct {
 	Name  *Ident
 }
 
-// MethodType is §4.7's `( {ProtocolQualifier} [TypeName] )`: the
-// parenthesized type of a method's return value or of one keyword's
-// parameter.
-//
-// Type is nil where only distributed-object qualifiers were written —
-// `- (oneway)shutdown;` is well-formed and states no type. An empty `()` is
-// derivable and is rejected by diagnosis rather than by parse failure, so a
-// MethodType with neither quals nor type can exist in a tree the parser has
-// already reported on.
+// MethodType is `( {ProtocolQualifier} [TypeName] )` for return or parameter types (§4.7).
 type MethodType struct {
 	Span
 	Lparen token.Pos
@@ -252,9 +187,7 @@ type MethodType struct {
 	Rparen token.Pos
 }
 
-// ProtoQual is one of §4.7's distributed-object qualifiers. They lex as
-// identifiers and mean something only inside a MethodType, so the parser
-// resolves them by position and stores what it resolved.
+// ProtoQual is a distributed-object qualifier (in, out, inout, bycopy, byref, oneway).
 type ProtoQual struct {
 	Span
 	Kind ProtoQualKind
@@ -290,16 +223,7 @@ func (k ProtoQualKind) String() string {
 	return "ProtoQualKind(?)"
 }
 
-// PropertyDecl is §4.8's @property.
-//
-//	@property (nonatomic, copy) NSString *first, *last;
-//
-// One property is declared per declarator, so that line declares two. A
-// property declarator may not carry a bit-field width and may not be
-// abstract — constraints, checked where constraints are.
-//
-// Lparen is NoPos when no attribute list was written; an empty list is not
-// the same thing and is legal (`@property () NSString *name;`).
+// PropertyDecl represents a @property declaration (§4.8).
 type PropertyDecl struct {
 	Span
 	Keyword token.Pos
@@ -311,12 +235,7 @@ type PropertyDecl struct {
 	Semi    token.Pos
 }
 
-// PropertyAttr is one entry of a property attribute list: a name from §4.8's
-// closed set, or `getter = Selector`, or `setter = Selector :`.
-//
-// Sel is the selector named by a getter or setter attribute and is nil
-// otherwise. Colon is the trailing colon of a setter's selector, which is
-// part of the selector rather than punctuation between attributes.
+// PropertyAttr is an entry in a property attribute list (e.g. nonatomic, copy, getter=foo).
 type PropertyAttr struct {
 	Span
 	Kind   PropertyAttrKind

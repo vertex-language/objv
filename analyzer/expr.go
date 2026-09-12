@@ -10,19 +10,8 @@ import (
 	"github.com/vertex-language/objv/types"
 )
 
-// Expression typing, and the constraints that need it.
-//
-// The rule this file works to is that a nil type means "not known", and
-// nothing is reported about an operand whose type is not known. A checker
-// that guesses produces a diagnostic about code that is correct, which is
-// worse than saying nothing: the user cannot fix it, and learns to ignore the
-// compiler.
-
-// expr types an expression and reports what it can about it.
-//
-// The type returned is the expression's own — an array is still an array, a
-// function still a function. Contexts that perform C11 §6.3.2.1's
-// conversions call rvalue instead.
+// expr types an expression and records its type in Info.Types.
+// Returns nil if the type cannot be determined.
 func (c *checker) expr(e ast.Expr) types.Type {
 	t := c.expr1(e)
 	if t != nil && e != nil {
@@ -265,14 +254,8 @@ func (c *checker) stringType(n *ast.StringLit) types.Type {
 	return &types.Array{Elem: sv.Elem, Form: types.FixedArray, Len: int64(len(sv.Data))}
 }
 
-// cocoaClass is the type of a literal whose class the language names but the
-// compiler does not define: NSString for @"…", NSNumber for @42, NSArray and
-// NSDictionary for the collection literals.
-//
-// The class has to have been declared. A literal is a message send to it —
-// +stringWithUTF8String:, +numberWithInt:, +arrayWithObjects:count: — and a
-// send to a class this unit has never heard of is a send to nothing, which is
-// exactly what clang says about the same program.
+// cocoaClass resolves the object type for a literal class (NSString, NSNumber, NSArray, NSDictionary),
+// reporting an error if the class is not declared and complete.
 func (c *checker) cocoaClass(at ast.Node, name string) types.Type {
 	k := c.class(name)
 	if !k.Complete {
@@ -282,9 +265,7 @@ func (c *checker) cocoaClass(at ast.Node, name string) types.Type {
 	return types.NewObject(k)
 }
 
-// identType resolves an ordinary identifier and reports one that is not
-// declared. C11 removed the implicit declaration, so a name with nothing
-// behind it is a constraint violation here rather than a link failure later.
+// identType resolves an ordinary identifier, class name, or builtin function.
 func (c *checker) identType(id *ast.Ident) types.Type {
 	name := c.name(id)
 	if name == "" {
@@ -292,17 +273,12 @@ func (c *checker) identType(id *ast.Ident) types.Type {
 	}
 	if s := c.lookup(name); s != nil {
 		if s.kind == symEnumConst {
-			// An enumeration constant is a constant expression wherever it
-			// appears (§6.6), and this is the only place that knows which
-			// one this name is. Recording the value is what lets lower emit
-			// it without a second symbol table — the constant has no
-			// storage to look up.
+			// Record enum constant value for lowering.
 			c.info.Consts[id] = s.value
 		}
 		return s.typ
 	}
-	// A bare class name in expression position is the class object, which is
-	// what `[NSString class]` and `NSString.alloc` both start from.
+	// Bare class name in expression position denotes the class object.
 	if k, ok := c.classes[name]; ok {
 		return c.classObjectType(k)
 	}
@@ -324,9 +300,78 @@ func (c *checker) identType(id *ast.Ident) types.Type {
 	}
 	if !c.undeclared[name] {
 		c.undeclared[name] = true
-		c.report(id, "'"+name+"' is undeclared")
+		msg := "'" + name + "' is undeclared"
+		if alt := c.similarName(name); alt != "" {
+			msg += "; did you mean '" + alt + "'?"
+		}
+		c.report(id, msg)
 	}
 	return nil
+}
+
+// similarName searches active scopes and classes for a declared identifier close to name
+// (within an edit distance threshold of (len+2)/3), or returns "".
+func (c *checker) similarName(name string) string {
+	if len(name) < 3 {
+		return ""
+	}
+	maxEdits := (len(name) + 2) / 3
+	best, bestD := "", maxEdits+1
+	consider := func(cand string) {
+		if len(cand) < 3 || cand == name {
+			return
+		}
+		if d := editDistance(name, cand, bestD); d < bestD {
+			best, bestD = cand, d
+		}
+	}
+	for i := len(c.scopes) - 1; i >= 0; i-- {
+		for cand := range c.scopes[i].ordinary {
+			consider(cand)
+		}
+	}
+	for cand := range c.classes {
+		consider(cand)
+	}
+	return best
+}
+
+// editDistance computes bounded Levenshtein distance, terminating early if exceeding limit.
+func editDistance(a, b string, limit int) int {
+	if d := len(a) - len(b); d >= limit || -d >= limit {
+		return limit
+	}
+	prev := make([]int, len(b)+1)
+	cur := make([]int, len(b)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(a); i++ {
+		cur[0] = i
+		row := cur[0]
+		for j := 1; j <= len(b); j++ {
+			cost := 1
+			if a[i-1] == b[j-1] {
+				cost = 0
+			}
+			m := prev[j-1] + cost
+			if v := prev[j] + 1; v < m {
+				m = v
+			}
+			if v := cur[j-1] + 1; v < m {
+				m = v
+			}
+			cur[j] = m
+			if m < row {
+				row = m
+			}
+		}
+		if row >= limit {
+			return limit
+		}
+		prev, cur = cur, prev
+	}
+	return prev[len(b)]
 }
 
 // checkAvailability reads §6.10's clauses and reports the two things that

@@ -24,45 +24,18 @@ const (
 	// they are trivia, still reachable via token.File.Between.
 	ScanComments Mode = 1 << iota
 
-	// ScanPP scans preprocessing tokens: the input is a source file,
-	// not the output of a preprocessor. Four things change, all
-	// because this package is now running below phase 4 instead of
-	// above it.
-	//
-	//  1. A line-opening # is a HASH token, not trivia, and the
-	//     once-per-file "preprocess first" report is off. A directive
-	//     in a .m file is not a mistake.
-	//  2. The bracket stack is off. `#define BEGIN {` is a real and
-	//     common header idiom; bracket balance across a whole file is
-	//     a claim about preprocessed source, not about a header.
-	//  3. The first token carries FlagNLBefore, because it does open
-	//     a logical line — which is what makes a # in column 1 of
-	//     line 1 a directive.
-	//  4. Value-level literal diagnostics are deferred. A pp-number
-	//     is not yet a constant: 0779 and 10.12.2 are legal
-	//     pp-numbers, and a macro body or an excluded group may
-	//     legally hold what phase 7 would reject. The same defers an
-	//     unknown @directive, which an excluded group may also hold.
-	//     Classification (INT_LIT vs FLOAT_LIT, @interface vs @) still
-	//     happens — phase 4 needs it — but those reports fire only for
-	//     tokens that survive: the #if evaluator decodes and reports
-	//     the ones it consumes, and everything that reaches phase 5 is
-	//     scanned again without ScanPP. Token-formation errors
-	//     (unterminated literals, stray '\', illegal characters) still
-	//     report here: they are about whether a pp-token exists, not
-	//     what it is worth.
+	// ScanPP scans preprocessing tokens for source files prior to phase 4.
+	// Line-opening '#' is emitted as HASH, bracket balancing is disabled,
+	// the first token has FlagNLBefore, and value-level literal diagnostics
+	// are deferred until expansion or re-scanning.
 	ScanPP
 
-	// NoDollarIdents drops $ from the identifier alphabet. §2.1 makes
-	// it an extension that is on by default, which is what the Cocoa
-	// headers and the runtime's own symbols expect; this is the
-	// command-line option that turns it off.
+	// NoDollarIdents drops '$' from the identifier alphabet (§2.1 extension, on by default).
 	NoDollarIdents
 )
 
-// Scan is the entire API. The slice always ends in an EOF token (the
-// one zero-width span). Diagnostics are sorted, with phase 1–2
-// diagnostics from token.NewFile already merged in.
+// Scan tokenizes f. The returned token slice always ends in an EOF token.
+// Diagnostics are sorted, including merged phase 1–2 diagnostics from f.
 func Scan(f *token.File, mode Mode) ([]token.Token, []token.Diagnostic) {
 	s := &scanner{
 		f:        f,
@@ -180,18 +153,8 @@ func (s *scanner) scanToken() {
 	s.quietTok = false
 	c := s.text[s.off]
 
-	// A # (or %:) opening a logical line is consumed to end of line
-	// as trivia and reported once per file. # anywhere else scans as
-	// HASH for the parser to reject.
-	//
-	// Under ScanPP it is a HASH like any other: the directive grammar
-	// lives in the preprocessor, and it needs the token.
-	//
-	// A #pragma is the exception, and is scanned rather than skipped.
-	// Phase 4 does not consume the pragmas it does not act on — it
-	// forwards them, deliberately, because some of them mean something to
-	// phase 7. #pragma pack is one: it changes the layout of every
-	// structure declared after it, which no earlier phase could apply.
+	// Outside ScanPP, a line-opening '#' (or '%:') is skipped as trivia unless
+	// it begins a #pragma (which must reach the parser for e.g. #pragma pack).
 	if s.lineOpen && s.mode&ScanPP == 0 && (c == '#' || (c == '%' && s.peek(1) == ':')) &&
 		!s.atPragma() {
 		s.directiveLine()
@@ -245,12 +208,7 @@ func (s *scanner) directiveLine() {
 	for s.off < len(s.text) && s.text[s.off] != '\n' && s.text[s.off] != '\r' {
 		s.off++
 	}
-	// A line marker is not a directive. `# 42 "foo.m" 3` is what gcc,
-	// clang and objv's own --emit mi put in preprocessed output to say
-	// where the following lines came from, and .mi input is exactly
-	// that output — so warning about it would fire on every file this
-	// scanner is meant to read. It carries no program text and is
-	// skipped.
+	// Skip line markers (e.g. `# 42 "foo.m" 3` or `#line ...`) without warning.
 	if !s.hashReported && !isLineMarker(s.text[start:s.off]) {
 		s.hashReported = true
 		s.report(token.Warn, start, s.off,
@@ -280,12 +238,7 @@ func isLineMarker(line []byte) bool {
 	return true
 }
 
-// scanExtended consumes a run of bytes outside ASCII as one ILLEGAL
-// token. §2.1's identifier alphabet reaches an extended character only
-// through a UniversalCharacterName, so one written directly is not an
-// identifier character — but it is one mistake and not one per byte,
-// which is what the run is for. Inside a comment, a string, or a
-// character constant the bytes never reach here.
+// scanExtended consumes a run of non-ASCII bytes as a single ILLEGAL token (§2.1).
 func (s *scanner) scanExtended() {
 	start := s.off
 	for s.off < len(s.text) && s.text[s.off] >= 0x80 {
@@ -535,17 +488,8 @@ func (s *scanner) emitFlags(k token.Kind, start int, fl token.Flags) {
 	s.nlBefore = false
 }
 
-// other emits the pp-token C11 §6.4p1 spells "each non-white-space
-// character that cannot be one of the above": a backslash outside a
-// UCN, a `.
-//
-// The grammar has a production for it, so under ScanPP it exists and is
-// quiet. What it does not have is a token to be converted into, which is
-// §6.4p1's constraint on phase 7 and not on phase 3 — so the diagnostic
-// fires when the character survives macro expansion and is scanned again
-// without ScanPP, and not where it was written. A macro body that no
-// translation unit expands, or an #if group that is excluded, may hold
-// what phase 7 would reject without it being anyone's mistake.
+// other emits an ILLEGAL token for non-whitespace characters not matching any
+// other pp-token (C11 §6.4p1). Under ScanPP errors are deferred until phase 7.
 func (s *scanner) other(start int, msg string) {
 	if s.mode&ScanPP == 0 {
 		s.errTok(start, s.off, msg)
@@ -563,14 +507,8 @@ func (s *scanner) errTok(lo, hi int, msg string) {
 	s.report(token.Error, lo, hi, msg)
 }
 
-// valueErr reports a mistake that is about what a token is worth rather
-// than whether it exists: a suffix, digit, exponent, or escape that
-// phase 7's decoding would reject, or an @ on an identifier that is not
-// a directive. Under ScanPP these defer — only the tokens that survive
-// phase 4 are anyone's mistake. The #if evaluator reports the ones it
-// decodes; the re-scan above phase 4 reports the ones that reach the
-// parser. Formation errors (unterminated literals, stray '\') go
-// through errTok and never defer.
+// valueErr reports semantic token errors (invalid suffix, digit, etc.).
+// Under ScanPP, value errors are deferred until phase 7.
 func (s *scanner) valueErr(lo, hi int, msg string) {
 	if s.mode&ScanPP != 0 {
 		return

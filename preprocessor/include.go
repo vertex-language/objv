@@ -51,13 +51,7 @@ func escapeMake(s string) string {
 	return strings.NewReplacer(" ", `\ `, "#", `\#`, "$", "$$").Replace(s)
 }
 
-// cached is one entry of the open-once cache. Content is read at most once per
-// translation unit; guard is the controlling macro discovered when the file
-// was fully read, and is what lets a second #include skip the file entirely.
-//
-// diags holds the phases 1–3 diagnostics scanning produced, deferred: they are
-// reported on the first read, through the real Origin, so they carry the
-// inclusion chain and the System treatment — open() has neither.
+// cached stores parsed tokens and header guard info for an included file.
 type cached struct {
 	file  *token.File
 	toks  []Token
@@ -65,20 +59,10 @@ type cached struct {
 	guard string
 	done  bool
 
-	// once is set when the file need not be read again whatever the macro
-	// table says: it was reached by #import, or it said #pragma once while
-	// being read. Unlike guard there is no macro standing behind the
-	// request that the program could undefine.
+	// once is set when reached via #import or containing #pragma once.
 	once bool
 
-	// entered is set the first time the file is read, by whatever
-	// directive. It is what #import asks about: the directive means "read
-	// this at most once", and a file already read by #include has been
-	// read. Metal's MTL4BufferRange.h is the header that says so -- it has
-	// no guard of any kind, MTLAccelerationStructureTypes.h #includes it
-	// and MTL4CommandBuffer.h #imports it, and a compiler that only
-	// remembers the #imports reads it twice and reports its struct
-	// redefined.
+	// entered marks whether the file has been read at least once.
 	entered bool
 }
 

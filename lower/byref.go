@@ -8,34 +8,11 @@ import (
 	"github.com/vertex-language/objv/types"
 )
 
-// __block variables.
+// Lowering for __block variables.
 //
-// A block captures a copy, which is what makes a capture const and a block
-// cheap. `__block` asks for the other thing: one variable, shared by the
-// function and by every block that captured it, and still shared after the
-// block has outlived the frame the variable was declared in.
-//
-// It is arranged by moving the variable out of the frame and into a
-// structure of its own — runtime.BlockByref — that the frame and the block
-// both point at. Every access goes through that structure's `forwarding`
-// field rather than to it directly, and that indirection is the whole
-// mechanism: while the structure is on the stack, forwarding points at
-// itself; when _Block_copy moves it to the heap, the stack copy's forwarding
-// is rewritten to the heap one, and both frames go on reading one object.
-//
-//	    __block int n = 5;              n++ inside a block becomes
-//	                                    byref->forwarding->n += 1
-//	 ┌──────────────┐
-//	 │ isa      = 0 │  the structure, in the frame that declared n
-//	 │ forwarding ──┼──▶ itself, until _Block_copy says otherwise
-//	 │ flags    = 0 │
-//	 │ size    = 32 │
-//	 │ n        = 5 │
-//	 └──────────────┘
-//
-// The block literal captures the *address* of the structure, and its copy
-// helper hands it to the runtime with BLOCK_FIELD_IS_BYREF, which is what
-// moves it to the heap when the block is copied.
+// Variables declared with __block are wrapped in a runtime.BlockByref structure
+// accessed through a forwarding pointer, allowing sharing between enclosing functions
+// and capturing blocks, and enabling heap migration on copy.
 
 // byref is a __block variable: where its structure is, and where the
 // variable sits inside it.

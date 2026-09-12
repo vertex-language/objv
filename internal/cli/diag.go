@@ -10,13 +10,7 @@ import (
 	"github.com/vertex-language/objv/token"
 )
 
-// One renderer, for one kind of diagnostic.
-//
-// Every diagnostic the library returns is sited in a real file — phase 4's
-// where it found them, and the later phases' mapped back out of the
-// preprocessed text — so there is nothing left here to decide. What is left
-// is presentation: the source line, the caret under it, the notes below it,
-// and the chain of #imports that reached the file.
+// Diagnostic formatting and source snippet rendering for the CLI.
 
 // printDiags renders each diagnostic and reports whether any was an error.
 func printDiags(w io.Writer, diags []objv.Diagnostic) bool {
@@ -39,17 +33,7 @@ func printSiteSnippet(w io.Writer, s preprocessor.Site) {
 	printSnippetAt(w, s.Origin.File, s.Pos, s.End)
 }
 
-// printIncludeChain prints gcc's "In file included from" trail, outermost
-// last, so the reader walks from the header back to the file they compiled.
-//
-// It earns its place in an Objective-C compiler more than in a C one: one
-// `#import <Foundation/Foundation.h>` reaches some nine hundred headers, and
-// a diagnostic in one of them is unreadable without the path that got there.
-//
-// Each Origin's IncludePos lives in its Parent's file — token's invariant #2
-// says a Pos is meaningless outside the File that produced it — so the walk
-// advances the child alongside the parent and never reuses a Pos across
-// position spaces.
+// printIncludeChain prints the "In file included from" trail back to the main file.
 func printIncludeChain(w io.Writer, s preprocessor.Site) {
 	if s.Origin == nil {
 		return

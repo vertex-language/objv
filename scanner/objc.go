@@ -6,17 +6,8 @@ import (
 	"github.com/vertex-language/objv/token"
 )
 
-// scanAt scans the @ punctuator and the two longer tokens it heads: a
-// Directive (§2.5) and an ObjectStringLiteral (§2.4).
-//
-// §2 notes that an implementation will generally tolerate whitespace
-// or a comment between the @ and the identifier. objv tolerates the
-// whitespace. It does not tolerate a comment, because a comment
-// between them has nowhere to go: swallowed into the token's span it
-// is a COMMENT token that ScanComments promised and did not deliver,
-// and emitted on its own it is a token sitting inside another token's
-// span. `@ /* why */ interface` is therefore an @ and an identifier,
-// and the parser reports the @ that heads nothing.
+// scanAt scans the '@' punctuator, directives (§2.5), and string literals (§2.4).
+// Whitespace after '@' is tolerated; comments between '@' and identifier are not merged.
 func (s *scanner) scanAt() {
 	at := s.off
 	s.off++ // @
@@ -36,9 +27,7 @@ func (s *scanner) scanAt() {
 
 	switch c := s.text[gap]; {
 	case c == '"':
-		// @"…" is one token and one pointer to a string object, where
-		// "…" alone is an array of characters. §6.1 lets a sequence
-		// that starts with this one continue in either spelling.
+		// @"…" is an OBJC_STRING_LIT token (§2.4).
 		s.off = gap
 		if terminated, _ := s.scanQuoted('"'); !terminated {
 			s.errTok(at, s.off, "unterminated string literal")
@@ -56,23 +45,17 @@ func (s *scanner) scanAt() {
 			s.emitFlags(k, at, fl)
 			return
 		}
-		// Not a directive, and the set is closed. The @ stands alone
-		// and the identifier is scanned by the next turn of the loop:
-		// @__objc_yes and @__objc_no are §6.8's boxed BooleanConstant
-		// and are well-formed, so only the rest is reported.
+		// Not a directive; emit standalone AT and let next iteration scan identifier.
 		s.emit(token.AT, at)
 		s.atIdentErr(at, end, name)
 
 	default:
-		// @( @[ @{ @42 @-1 @'c' — §6.8's boxing and collection
-		// literals, each of which is an @ and then an ordinary token.
+		// Boxed expressions and literals (§6.8): emit standalone AT.
 		s.emit(token.AT, at)
 	}
 }
 
-// atIdentErr reports an @ on an identifier that §2.5's closed list does
-// not name. It defers under ScanPP like any other value-level report:
-// an excluded #if group may hold an @ on anything.
+// atIdentErr reports an '@' prefix on an identifier that is not a directive (§2.5).
 func (s *scanner) atIdentErr(at, end int, name string) {
 	switch name {
 	case "__objc_yes", "__objc_no":

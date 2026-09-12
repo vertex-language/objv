@@ -1,58 +1,24 @@
 package runtime
 
-// The block ABI.
+// Block ABI definitions and struct layouts (per Apple Block-ABI-Apple.txt).
 //
-// A block is not part of the Objective-C runtime — it is C's, and it works
-// in a .c file with no classes anywhere near it — but it is described here
-// with the class metadata because it is the same kind of fact: a layout two
-// separate programs have to agree on, where one of them is libSystem and
-// cannot be changed. What follows is Apple's Block-ABI-Apple.txt, checked
-// against what clang emits, which is the only way to know it is right.
-//
-// A block literal is a structure whose first word is an isa: a block *is* an
-// object, which is why it can be sent -copy and put in an NSArray. The rest
-// is a function pointer and a pointer to a descriptor, and then whatever the
-// literal captured, laid out in the order the literal captured it.
-//
-//	struct block_literal {
-//	    void *isa;              // _NSConcreteStackBlock or _NSConcreteGlobalBlock
-//	    int32_t flags;
-//	    int32_t reserved;
-//	    void (*invoke)(void *, ...);
-//	    struct block_descriptor *descriptor;
-//	    // captures
-//	};
-//
-// Calling one is `b->invoke(b, args...)`: the block passes itself as the
-// hidden first argument, which is how the invoke function reaches the
-// captures.
+// A block literal begins with an isa pointer, flags, reserved, invoke function pointer,
+// and block descriptor pointer, followed by captured variables.
 
-// BlockFlag is the flags word of a block literal. Only the ones objv writes
-// or reads are named; the rest of the word belongs to the runtime, which
-// keeps a reference count in the low 16 bits of a block it has copied.
+// BlockFlag represents flags in the block literal header.
 type BlockFlag uint32
 
 const (
-	// BlockHasCopyDispose says the descriptor carries the two helper
-	// functions, which the runtime calls when a block is copied to the heap
-	// and when the copy dies. A block that captured an object has them and a
-	// block that captured only scalars does not: there is nothing to retain.
+	// BlockHasCopyDispose indicates descriptor contains copy/dispose helper functions.
 	BlockHasCopyDispose BlockFlag = 1 << 25
 
-	// BlockIsGlobal says the literal is a global rather than a stack
-	// object. _Block_copy of one returns it unchanged — there is nothing to
-	// copy, since it captured nothing and so cannot differ between
-	// executions of the statement that named it.
+	// BlockIsGlobal indicates the block literal is global (constant in data).
 	BlockIsGlobal BlockFlag = 1 << 28
 
-	// BlockHasStret says invoke takes a hidden return buffer, so the
-	// runtime's forwarding must call it through the struct-return
-	// convention.
+	// BlockHasStret indicates the block uses struct-return calling conventions.
 	BlockHasStret BlockFlag = 1 << 29
 
-	// BlockHasSignature says the descriptor carries the @encode string for
-	// invoke. Everything modern sets it: it is what lets the runtime build
-	// an NSMethodSignature for a block, and clang sets it unconditionally.
+	// BlockHasSignature indicates the descriptor carries an @encode type signature.
 	BlockHasSignature BlockFlag = 1 << 30
 )
 
@@ -114,29 +80,8 @@ const (
 	BlockRelease = "_Block_release"
 )
 
-// BlockByref is the structure a __block variable lives in.
-//
-// The variable is not in the block literal and not in the frame: it is in
-// this, which the literal points at, so that the function and every block
-// that captured it see one variable rather than one copy each. That is the
-// whole of what __block means.
-//
-// forwarding is why it works after the block outlives the frame. While the
-// structure is on the stack it points at itself; when _Block_copy moves it
-// to the heap, the stack copy's forwarding is rewritten to the heap one, and
-// every access — from the declaring function as much as from the block —
-// goes `byref->forwarding->x`. Both frames then read and write one object.
-//
-//	struct Block_byref {
-//	    void *isa;                       // null
-//	    struct Block_byref *forwarding;
-//	    int32_t flags;
-//	    int32_t size;
-//	    // if BLOCK_BYREF_HAS_COPY_DISPOSE:
-//	    void (*byref_keep)(void *dst, void *src);
-//	    void (*byref_destroy)(void *);
-//	    // the variable
-//	};
+// BlockByref is the header layout for a __block variable, accessed via its
+// forwarding pointer so accesses remain valid when migrated to the heap.
 var BlockByref = []Field{
 	{Ptr, "isa"},
 	{Ptr, "forwarding"},

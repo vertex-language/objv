@@ -39,17 +39,8 @@ type File struct {
 }
 
 // NewFile translates src through phases 1–2 and returns its File.
-// Trigraph replacements are reported at Warn severity.
-//
-// C11 §5.1.1.2 leaves a non-empty file that does not end in a newline
-// undefined; objv defines it: end of file terminates the final line,
-// silently. The hazard the rule guards against — the last line of an
-// imported file textually fusing with the first line after the
-// #import — cannot occur here, because inclusion merges token
-// streams, never bytes. A file whose final newline is consumed by a
-// line splice is still reported, as a warning: the author wrote a
-// continuation that continues into nothing, which is almost always a
-// truncated file.
+// Trigraph replacements are reported as warnings. End of file implicitly
+// terminates the final line (C11 §5.1.1.2); an EOF line splice warns.
 func NewFile(name string, src []byte) *File {
 	f := &File{name: name, src: src}
 	f.scanLines()

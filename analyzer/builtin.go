@@ -2,36 +2,8 @@ package analyzer
 
 import "github.com/vertex-language/objv/types"
 
-// The compiler's own functions.
-//
-// A builtin is declared by no header. Every spelling beginning __builtin_ is
-// reserved to the implementation, __has_builtin is how a program asks whether
-// this compiler has a particular one, and the signature is the compiler's to
-// know — which is why the table has to live here. An expression whose
-// function has no type is an expression with no type, and a phase further
-// down reports that fact once per operator built on it, in words that name
-// the wrong thing:
-//
-//	error: internal: no type recorded for *ast.Ident
-//	error: internal: no type recorded for *ast.CallExpr
-//	error: internal: no type recorded for *ast.BinaryExpr
-//
-// for the one call the compiler could not type.
-//
-// What the table holds is what objv *implements* — every entry is emitted by
-// lower/builtin.go, and TestBuiltinsAreLowered asserts the two agree. A
-// __builtin_ name outside it is reported by name, once, rather than waved
-// through: `#import <Foundation/Foundation.h>` reaches a dozen of these
-// through <math.h> and <libkern/OSByteOrder.h> alone, and accepting one the
-// compiler cannot emit only moves the failure somewhere it cannot be
-// explained.
-//
-// The selection is not a guess about what programs want. It is what VIR has
-// an operation for: abs, sqrt, ceil, floor, trunc, copysign, minnum, maxnum,
-// fma, clz, ctz, popcnt, bswap. A builtin in that correspondence costs one
-// instruction and nothing else; one outside it would have to be a call to a
-// function of the same name, which is a decision to make when something needs
-// it rather than in advance.
+// Builtin function signatures recognized by the compiler.
+// All functions listed here map directly to VIR operations implemented in lower/builtin.go.
 
 // builtinSpec is one builtin's type.
 //

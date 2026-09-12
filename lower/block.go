@@ -11,35 +11,10 @@ import (
 	"github.com/vertex-language/objv/types"
 )
 
-// Blocks.
-//
-// A block literal becomes three things and sometimes five: a structure built
-// where the literal was written, a function holding its body, a descriptor
-// the runtime reads, and — when the literal captured something the runtime
-// has to retain — a copy helper and a dispose helper.
-//
-// The structure is the block. Its first word is an isa, which is why a block
-// can be sent -copy and put in an NSArray; then a flags word, then the
-// function, then the descriptor, then whatever was captured, laid out in the
-// order the source named it. Calling the block is `b->invoke(b, args…)`: the
-// block passes itself as a hidden first argument, and that is the only way
-// the body reaches a capture. runtime/block.go has the layout and where it
-// came from.
-//
-// Which variables are captured is not decided here. It is a question about
-// C's scopes — whether `n` in the body is the enclosing function's or one
-// the block declared — and the analyzer answers it, in analyzer.Info.
-// Captures, in the order the body first named each one, which is the order
-// they are laid out in.
-//
-// Two kinds of literal come out of this. One that captured nothing is a
-// *global* block: there is nothing about it that differs between two
-// executions of the statement, so the whole structure is a constant in
-// (__DATA,__const) and the expression is its address. One that captured
-// something is a *stack* block, built into the frame by stores. A program
-// that wants a stack block to outlive its frame has to say so, by calling
-// Block_copy or by sending it -copy; that is the block ABI's rule and not
-// this compiler's.
+// Block literals lower into a descriptor, an invoke function, optional copy/dispose
+// helpers, and a block structure containing captured variables.
+// Global blocks (no captures) are emitted as constants in __const.
+// Stack blocks are allocated on the stack with captures from analyzer.Info.Captures.
 
 // blockCapture is one capture with its place in the literal decided.
 type blockCapture struct {

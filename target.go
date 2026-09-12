@@ -64,44 +64,26 @@ const (
 	ldblQuad                   // IEEE binary128 (aarch64 Linux)
 )
 
-// A Target is everything a target name decides, in one object.
-//
-// "aarch64-macos" says three things to three parts of the compiler. To the
-// front end it is a type model: how wide a long is, what float.h says about
-// long double. To the Objective-C half it is a runtime ABI: which metadata
-// layout, which objc_msgSend variant, which sections. Below VIR it is an
-// architecture, a container format, and the prefix a C identifier wears in
-// the symbol table.
-//
-// All three are here, because the caller who needs one usually needs the
-// others, and because holding them in three places is what forces a name to
-// be looked up three times and answered differently twice.
+// A Target specifies the type model, Objective-C runtime ABI, and backend
+// architecture/container format for compilation.
 type Target struct {
 	name string
 
-	// The front end's half.
+	// Front end
 	model types.Model
 	ldbl  ldblKind
-	wint  string // C type of wint_t: glibc says unsigned int, Darwin says int
+	wint  string // C type of wint_t
 
-	// The Objective-C half.
-	abi    objcrt.ABI
-	rtArch objcrt.Arch
-
-	// platform is what §6.10's @available compares a clause's name against,
-	// in the numbering LC_BUILD_VERSION uses. It is zero on a target with no
-	// such notion, where every availability check is the trailing `*`.
+	// Objective-C runtime
+	abi      objcrt.ABI
+	rtArch   objcrt.Arch
 	platform objcrt.Platform
 
-	// The machine's half.
-	arch   Arch
-	format Format
-	irt    ir.Target
-	prefix string // "_" on Mach-O, empty on ELF; lower.Options applies it
-
-	// unsupported, when non-empty, is why this target names a machine no hop
-	// below VIR is written for. It is data rather than a discovery, so a
-	// caller can ask before compiling instead of learning four phases in.
+	// Backend
+	arch        Arch
+	format      Format
+	irt         ir.Target
+	prefix      string // Symbol prefix ("_" on Mach-O, empty on ELF)
 	unsupported string
 }
 

@@ -13,11 +13,7 @@ import (
 	"github.com/vertex-language/objv/sysroot"
 )
 
-// The flag sets, and the one place an *objv.Compiler is built.
-//
-// Everything here is command-line work: parsing repeatable flags, keeping
-// their order, and reading the environment variables a compiler must not read
-// for itself. What the flags mean is the library's.
+// Flag set definitions and Compiler construction from CLI arguments.
 
 type stringList []string
 
@@ -25,7 +21,6 @@ func (s *stringList) String() string     { return strings.Join(*s, ",") }
 func (s *stringList) Set(v string) error { *s = append(*s, v); return nil }
 
 // defineFlag appends to a shared slice so -D and -U keep command-line order.
-// `-D FOO -U FOO -D FOO=2` has to mean what it says.
 type defineFlag struct {
 	list *[]preprocessor.Predefine
 	kind preprocessor.PredefineKind
@@ -70,11 +65,7 @@ func (p *ppFlags) register(fs *flag.FlagSet) {
 	fs.BoolVar(&p.raw, "no-pp", false, "input is already preprocessed")
 }
 
-// compiler turns the flags into the library's compiler.
-//
-// The target is checked here rather than left to the library so the message
-// can name the flag that fixes it — which is the one thing a library cannot
-// say, and the one thing a person at a terminal wants to read.
+// compiler validates flags and constructs a new *objv.Compiler.
 func (p *ppFlags) compiler() (*objv.Compiler, error) {
 	if p.c != nil {
 		return p.c, nil
@@ -129,10 +120,7 @@ func (p *ppFlags) pp() objv.Tristate {
 	return objv.PPAuto
 }
 
-// epoch reads SOURCE_DATE_EPOCH. The CLI always supplies an epoch — the Unix
-// zero when the environment names none — so a build is deterministic with no
-// flag saying so. The library never reads it: a compiler that behaves one way
-// in a terminal and another in a test is a compiler nobody can trust.
+// epoch reads SOURCE_DATE_EPOCH or defaults to Unix epoch for deterministic builds.
 func epoch() (*time.Time, error) {
 	if s := os.Getenv("SOURCE_DATE_EPOCH"); s != "" {
 		n, err := strconv.ParseInt(s, 10, 64)

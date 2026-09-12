@@ -73,11 +73,8 @@ func (s *scanner) scanUCN() {
 	}
 }
 
-// scanNumber consumes one numeric run — §2.3's PPNumber: digits,
-// identifier characters, '.', and exponent signs — then classifies it
-// as a whole. Structural mistakes report once per run, never twice;
-// a suffix that is not a suffix is not one of them, for the reason
-// classify gives.
+// scanNumber consumes one numeric run (PPNumber: digits, identifier characters,
+// '.', and exponent signs) and classifies it.
 func (s *scanner) scanNumber() {
 	start := s.off
 	hex := s.text[s.off] == '0' && (s.peek(1) == 'x' || s.peek(1) == 'X')
@@ -89,13 +86,7 @@ loop:
 		case isDigit(c) || c == '.':
 			s.off++
 		case s.identStart(c):
-			// §2.3's PPNumber admits an IdentifierNondigit, which is any
-			// identifier character that is not a digit — the underscore
-			// included. It is not a curiosity: Apple's CF_AVAILABLE(10_0,
-			// 2_0) pastes its argument onto __MAC_ and needs 10_0 to be one
-			// token, and a scanner that stopped at the underscore produces
-			// __MAC_10 followed by a stray _0, which then fails to expand
-			// as the macro it was supposed to name.
+			// §2.3 PPNumber admits identifier nondigits (e.g. underscores in Apple's 10_0).
 			s.off++
 			sign := s.peek(0) == '+' || s.peek(0) == '-'
 			if sign && ((!hex && (c == 'e' || c == 'E')) || (hex && (c == 'p' || c == 'P'))) {
@@ -108,27 +99,13 @@ loop:
 	s.emit(s.classify(start, hex, bin), start)
 }
 
-// classify enforces the lexical grammar of §2.3 over the consumed run
-// and picks INT_LIT or FLOAT_LIT. The literal's value is a decoding
-// concern, phases above this one.
-//
-// Under ScanPP the reports defer (valueErr): the run is a legal
-// pp-number whatever it fails to classify as — 0779 and 10.12.2 may
-// live and die in a macro body or an excluded group without being
-// anyone's mistake. The classification itself still happens; phase 4
-// keys on it.
+// classify classifies the consumed numeric run as INT_LIT or FLOAT_LIT (§2.3).
+// Under ScanPP, value-level error reporting is deferred.
 func (s *scanner) classify(start int, hex, bin bool) token.Kind {
 	t := s.text[start:s.off]
 	fail := func(msg string) { s.valueErr(start, s.off, msg) }
 
-	// A run with two or more dots is not a constant in any base — one
-	// dot is the most a decimal or hexadecimal constant has — and it is
-	// the shape a version number takes. §6.10's VersionTuple is written
-	// exactly this way, `@available(macOS 10.12.1, *)`, and so is the
-	// availability attribute the Cocoa headers put on nearly every
-	// declaration. It is a legal pp-number that no phase gives a value
-	// to, so there is nothing to report here; the parser reads the
-	// digits back out of the span.
+	// Multi-dot numbers (e.g. version tuples like 10.12.1) are treated as FLOAT_LIT.
 	if dots(t) >= 2 {
 		return token.FLOAT_LIT
 	}
@@ -212,23 +189,8 @@ func (s *scanner) classify(start int, hex, bin bool) token.Kind {
 		}
 	}
 
-	// The suffix is not checked here.
-	//
-	// A run that fails to be a constant is still a legal preprocessing
-	// token (§2.3's PPNumber), and this scanner runs over token sequences
-	// no phase takes a value from — an attribute's arguments are §8's
-	// BalancedTokenSequence, and Apple writes a version number in one:
-	//
-	//	__attribute__((availability(macosx,introduced=10_2)))
-	//
-	// where `10_2` is a pp-number and not an integer constant, and saying
-	// so would be four hundred diagnostics about code that means what it
-	// says. The same reasoning already governs the two-dot case above.
-	//
-	// `int x = 1_024;` is still an error. It is reported where the value is
-	// decoded — analyzer.DecodeIntConst — which is the phase that needs the
-	// run to be a constant and the only one entitled to complain that it is
-	// not.
+	// Suffixes are not validated here: pp-numbers like 10_2 in availability
+	// attributes are valid balanced tokens; constant values are validated in analyzer.
 	if isFloat {
 		return token.FLOAT_LIT
 	}
@@ -273,9 +235,7 @@ func (s *scanner) scanChar(start int) {
 	s.emit(token.CHAR_LIT, start)
 }
 
-// scanString scans one string literal. Adjacent literals are not
-// concatenated — that is §6.1's StringLiteralSequence, above this
-// package, and it is where an @ on one piece reaches the others.
+// scanString scans a string literal. Adjacent literal concatenation is handled later.
 func (s *scanner) scanString(start int) {
 	terminated, _ := s.scanQuoted('"')
 	if !terminated {

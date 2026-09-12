@@ -18,10 +18,7 @@ func (p *parser) parseExpr() ast.Expr {
 	return x
 }
 
-// parseAssign parses a conditional expression and, if an assignment operator
-// follows, builds an AssignExpr. The grammar constrains the left operand to a
-// unary expression; that is a check on the finished tree, not a parsing
-// decision — the same policy ConstantExpression gets.
+// parseAssign parses an assignment expression or delegates to parseCond.
 func (p *parser) parseAssign() ast.Expr {
 	x := p.parseCond()
 	if isAssignOp(p.kind()) {
@@ -44,12 +41,7 @@ func isAssignOp(k token.Kind) bool {
 	return false
 }
 
-// parseCond: LogicalOrExpression [? [Expression] : ConditionalExpression].
-// ConstantExpression is this production; constant-ness is a check.
-//
-// The middle operand is optional, which is GCC's extension and is everywhere
-// in Objective-C: `name ?: @"untitled"` reads the variable once and yields it
-// when it is not nil. Every compiler that builds Cocoa accepts it.
+// parseCond parses conditional expressions (including the GNU x ?: y extension).
 func (p *parser) parseCond() ast.Expr {
 	x := p.parseBinary(2) // 2 is ||'s level; COMMA (1) never binds here
 	if !p.at(token.QUESTION) {
@@ -84,13 +76,7 @@ func (p *parser) parseBinary(minPrec int) ast.Expr {
 	}
 }
 
-// parseCastExpr settles cast vs. parenthesized expression with the name
-// table: `(T) - x` is a cast iff T is a type name. A `( type )` followed by
-// `{` is a compound literal, which is postfix.
-//
-// §6.5's bridge casts are the same production with a keyword in front of the
-// type, and the keyword makes the decision for free — nothing else may
-// follow a '(' there.
+// parseCastExpr parses a cast expression, compound literal, or delegates to parseUnary.
 func (p *parser) parseCastExpr() ast.Expr {
 	p.depth++
 	defer func() { p.depth-- }()
@@ -308,13 +294,7 @@ func (p *parser) parsePrimary() ast.Expr {
 	return &ast.BadExpr{Span: p.span(lo)}
 }
 
-// parseStringRun collects one §6.1 StringLiteralSequence: one node, one span
-// per piece, prefixes and any @ included.
-//
-// A sequence that begins with @"…" denotes a string object, and §6.1 lets its
-// continuations be written either way. One that begins plain may not later
-// acquire an @ — a piece with one after a plain start is where the sequence
-// ends, and the @ opens whatever comes next.
+// parseStringRun collects contiguous string literals into one StringLit node.
 func (p *parser) parseStringRun() *ast.StringLit {
 	lo := p.pos()
 	s := &ast.StringLit{Object: p.at(token.OBJC_STRING_LIT)}

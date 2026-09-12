@@ -7,27 +7,11 @@ import (
 	"github.com/vertex-language/objv/types"
 )
 
-// The accessors nobody wrote.
+// Accessor synthesis for properties (§4.8).
 //
-// §4.8: a property with neither @synthesize nor @dynamic still has an
-// instance variable and a pair of accessors — the modern runtime synthesizes
-// by default, and a program that writes `@property (copy) NSString *name;`
-// and nothing else expects `-name` and `-setName:` to exist. The analyzer
-// creates the *declarations*, so that a send to one typechecks; this creates
-// the bodies, without which the send reaches the runtime and fails with
-// "unrecognized selector".
-//
-// Most of the bodies are one load or one store. The interesting ones are a
-// call, and which call is the whole of what a property's attributes mean:
-//
-//	nonatomic, assign    load and store through the ivar's offset
-//	nonatomic, copy      objc_setProperty_nonatomic_copy
-//	atomic, retain       objc_getProperty, objc_setProperty_atomic
-//
-// An atomic *scalar* is stored directly all the same: a word-sized store is
-// already indivisible, and clang emits the same thing. Only an object needs
-// the runtime, because reading a pointer and retaining it have to happen
-// without a setter running in between, and the runtime owns that lock.
+// Synthesizes getter and setter implementations for stored properties not explicitly written:
+//   - Direct ivar load/store for assign/scalars and nonatomic strong
+//   - objc_getProperty / objc_setProperty runtime calls for atomic or copy object properties
 
 // synthesizeAccessors emits the accessors a class implementation did not
 // write, for every property the analyzer gave storage to.

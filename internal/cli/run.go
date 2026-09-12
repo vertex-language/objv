@@ -13,16 +13,7 @@ import (
 )
 
 // cmdRun builds a program into a temporary directory and runs it.
-//
-// Everything after `--` is the program's, which is why the flag set stops
-// there rather than at the first non-flag: `objv run p.m -- -o x` passes -o
-// to the program, and objv's own -o would be meaningless here anyway — the
-// image is temporary by definition.
-//
-// The temporary directory is the command's and not the library's. A library
-// that wrote a file somewhere and deleted it later would be doing something
-// its caller cannot see, which is the one thing a compiler used from a build
-// system must not do.
+// Arguments after '--' are forwarded to the built binary.
 func cmdRun(args []string, stdout, stderr io.Writer) int {
 	args, progArgs := splitDashDash(args)
 
@@ -35,10 +26,7 @@ func cmdRun(args []string, stdout, stderr io.Writer) int {
 	}
 	names := fs.Args()
 	if len(names) == 0 {
-		// The one command that will not read standard input. The program
-		// this builds is then run with this process's standard input, and
-		// there is only one of those: source read from it is source the
-		// program cannot have.
+		// run cannot read source from stdin because the spawned process inherits stdin.
 		fmt.Fprintln(stderr, "objv run: needs a file; the program it builds inherits "+
 			"standard input, so the source cannot come from there too")
 		return exitUsage

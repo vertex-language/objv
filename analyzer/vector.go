@@ -7,28 +7,10 @@ import (
 	"github.com/vertex-language/objv/types"
 )
 
-// clang's extended vectors, as the type checker sees them.
+// Type checking for clang extended vector types and swizzles (__ext_vector_type__).
 //
-// A vector is N elements of one scalar type, and every operation on one is
-// the scalar operation done to each lane at once: `a + b` adds lane by lane,
-// `a < b` compares lane by lane into a vector of the same shape, and a scalar
-// operand is spread across every lane first. None of it is C, all of it is
-// <simd/simd.h>, and <simd/simd.h> is what SceneKit, Metal, ModelIO and
-// GameplayKit take their geometry in.
-//
-// The part with no analogue anywhere else is the member syntax. A vector's
-// lanes are named, in four alphabets:
-//
-//	.x .y .z .w        position, the first four lanes
-//	.r .g .b .a        colour, the same four
-//	.s0 … .sF          index, all sixteen, one hexadecimal digit each
-//	.lo .hi .even .odd halves
-//
-// and a run of them is a *swizzle*: `v.xy` is a two-element vector of the
-// first two lanes, `v.zyx` reverses the first three, `v.xxxx` is the first
-// lane four times. One letter yields the element itself and not a
-// one-element vector — which is the rule that makes `p.x * p.x + p.y * p.y`
-// ordinary arithmetic.
+// Supports lane-wise arithmetic and member swizzles using position (.xyzw),
+// color (.rgba), hex indices (.s0-.sF), or sub-vector halves (.lo, .hi, .even, .odd).
 
 // vectorMember is the type of `v.name` where v is a vector, and whether name
 // is a swizzle at all.

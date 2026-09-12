@@ -199,10 +199,7 @@ func (p *parser) parseCompound(push bool) *ast.CompoundStmt {
 	return cs
 }
 
-// parseAsmStmt reads §7.4's assembly statement. The interior is a balanced
-// token sequence, which is what the grammar makes it: what may appear between
-// those parentheses varies by target, and the backend is the layer that
-// knows.
+// parseAsmStmt reads an inline assembly statement (§7.4).
 func (p *parser) parseAsmStmt(lo token.Pos) ast.Stmt {
 	a := &ast.AsmStmt{Keyword: p.pos(), Kind: token.ASM}
 	p.next()

@@ -13,14 +13,11 @@ type BuildParams struct {
 	// Output is the path the executable is written to. Required.
 	Output string
 
-	// Inputs are sources and objects in one ordered list, because a static
-	// link's order is the caller's and reordering it would be objv deciding
-	// something they said. What each one is for is decided by its name; see
-	// Input.
+	// Inputs are source files and object files in link order.
 	Inputs []Input
 
-	// Libraries and LibraryDirs are -l and -L. Frameworks and
-	// FrameworkDirs are -framework and -F, and are Darwin's alone.
+	// Libraries and LibraryDirs specify -l and -L options.
+	// Frameworks and FrameworkDirs specify -framework and -F options (Darwin).
 	Libraries     []string
 	LibraryDirs   []string
 	Frameworks    []string
@@ -33,14 +30,7 @@ type BuildParams struct {
 	Static bool
 }
 
-// Build compiles every source input and links the result.
-//
-// An input that is not source goes to the linker untouched, in place: one
-// ordered list holds both, and the order is preserved exactly.
-//
-// A program that is wrong comes back as a *DiagnosticError. Every other error
-// means objv could not run — an unknown target, an unreadable file, a link
-// that found no libSystem.
+// Build compiles all source inputs and links the resulting executable.
 func (c *Compiler) Build(p BuildParams) error {
 	if p.Output == "" {
 		return errors.New("build needs an output path")

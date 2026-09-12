@@ -85,7 +85,8 @@ func (c *checker) checkGenDecl(d *ast.GenDecl, external bool) {
 			c.report(id, "variably modified type requires block scope and automatic storage")
 		}
 
-		sym := &symbol{typ: t, node: id, block: sp.Block,
+		sym := &symbol{typ: t, node: id,
+			block:        sp.Block || types.BlockQualified(id.Decl),
 			extern:       external || sp.Storage == token.EXTERN,
 			static:       !external && sp.Storage == token.STATIC,
 			overloadable: c.hasAttr(sp.Attrs, "overloadable") || c.hasAttr(id.Attrs, "overloadable")}
@@ -105,7 +106,8 @@ func (c *checker) checkGenDecl(d *ast.GenDecl, external bool) {
 			if sp.Inline || sp.Noreturn {
 				c.report(id, "function specifiers apply only to functions")
 			}
-			if sp.Block && (external || sp.Storage == token.STATIC) {
+			if (sp.Block || types.BlockQualified(id.Decl)) &&
+				(external || sp.Storage == token.STATIC) {
 				// §5.1: __block shares a local with the blocks that capture
 				// it. A static or file-scope variable is already shared, so
 				// there is nothing for the qualifier to arrange.

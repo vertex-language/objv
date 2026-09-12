@@ -7,34 +7,11 @@ import (
 	"github.com/vertex-language/objv/types"
 )
 
-// Arrays whose length the program computes.
+// Lowering for C99 variable-length arrays (VLAs, §6.7.6.2).
 //
-// C99 §6.7.6.2: `int a[n];` is an array of n ints, where n is whatever the
-// expression evaluated to when control reached the declaration. Nothing about
-// it is known at compile time — not its size, not where in the frame it sits —
-// so it cannot be a frame slot. It is stack the function takes while it runs
-// and gives back when the block ends, which is what ir's alloca is and what
-// the arm64 backend already lowers (§D3).
-//
-// Two properties have to hold, and both are about the length being read once:
-//
-//   - `int a[n++];` increments n once. The length is evaluated where the
-//     declaration is, and the array keeps that size even if n changes
-//     afterwards. So the byte count is computed into a value here, and
-//     everything that needs the size later reads the value rather than the
-//     expression.
-//
-//   - `for (…) { int a[n]; … }` must not grow the stack every iteration.
-//     The enclosing block saves the stack pointer on the way in and restores
-//     it on the way out, so the space the body took comes back. One save per
-//     block that declares one, not one per declaration: the restore puts the
-//     pointer where it was, which undoes all of them at once.
-//
-// What is here is the one-dimensional case, which is what programs write.
-// `int a[n][m]` is refused rather than miscompiled: its element type is
-// itself variably modified, so `a[i]` has a stride nobody can compute from
-// the type alone, and every place that decays an array or indexes one would
-// have to carry the extent along. See declareVLA.
+// Array sizes are evaluated dynamically at the declaration site and allocated via alloca.
+// The enclosing block saves and restores the stack pointer to reclaim VLA space across iterations.
+// Only one-dimensional VLAs are supported.
 
 // vlaInfo is what a variably modified local remembers: how many bytes it
 // took, so that sizeof can answer.

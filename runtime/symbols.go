@@ -1,54 +1,26 @@
 package runtime
 
-// The symbols a translation unit defines and references.
+// Symbols and prefixes used in Objective-C metadata emission and runtime linking.
 //
-// Every name here is the one the runtime and the linker agree on, written
-// without the platform's leading underscore: Mach-O adds one when the object
-// writer emits the symbol, exactly as it does for a C function, and a name
-// that carried it here would be wrong on ELF.
-//
-// Three prefixes carry meaning and are worth reading before the list:
-//
-//	OBJC_CLASS_$_       a class, which the linker resolves across images
-//	_OBJC_$_            a piece of metadata private to this image
-//	l_OBJC_             a label the assembler keeps and the linker does not
-//
-// The middle one is why so many names below begin with an underscore that
-// looks redundant: it is the runtime's own convention for "this is not a
-// symbol anybody outside links against", and objc4's tools key on it.
+// Key prefixes:
+//   - OBJC_CLASS_$_: class symbols resolved across images
+//   - _OBJC_$_: metadata symbols internal to the image
+//   - l_OBJC_: local labels preserved in assembly but omitted from linker export
 
-// ClassSymbol is the class object: what `[Foo class]` yields, what a
-// subclass in another image links against, and what the class list points
-// at.
+// ClassSymbol returns the symbol for a class object.
 func ClassSymbol(class string) string { return "OBJC_CLASS_$_" + class }
 
-// EHTypeSymbol is a class's type-info object: three words the personality
-// reads to decide whether a thrown object is one of these.
-//
-// It exists for a class only where something catches it, and it is global
-// rather than local because the @catch may be in another image than the
-// @implementation — which is why it is a symbol with the class's name in it
-// rather than an anonymous constant.
+// EHTypeSymbol returns the type-info symbol for a class used in exception matching.
 func EHTypeSymbol(class string) string { return "OBJC_EHTYPE_$_" + class }
 
-// MetaclassSymbol is the metaclass object, which holds the class methods.
-// The metaclass of a root class is its own isa, which is what closes the
-// chain.
+// MetaclassSymbol returns the metaclass symbol holding class methods.
 func MetaclassSymbol(class string) string { return "OBJC_METACLASS_$_" + class }
 
-// ClassROSymbol and MetaclassROSymbol are the read-only halves: everything
-// about a class that is decided at compile time, which the runtime copies
-// out of and never writes to.
+// ClassROSymbol and MetaclassROSymbol return read-only class/metaclass metadata symbols.
 func ClassROSymbol(class string) string     { return "_OBJC_CLASS_RO_$_" + class }
 func MetaclassROSymbol(class string) string { return "_OBJC_METACLASS_RO_$_" + class }
 
-// IvarOffsetSymbol is the variable holding one instance variable's offset.
-//
-// It is the whole of the non-fragile ABI in one symbol: the offset is not a
-// constant in the instruction stream but a global the runtime writes when
-// the class is realized, so a superclass may grow an instance variable
-// without every subclass having to be recompiled. Every ivar access loads
-// this and adds it.
+// IvarOffsetSymbol returns the variable holding an instance variable's offset (non-fragile ABI).
 func IvarOffsetSymbol(class, ivar string) string {
 	return "OBJC_IVAR_$_" + class + "." + ivar
 }
@@ -111,12 +83,7 @@ func CategoryPropertiesSymbol(class, category string) string {
 	return "_OBJC_$_PROP_LIST_" + class + "_$_" + category
 }
 
-// MethodName is what a method is *called*: the language's own spelling,
-// brackets and all.
-//
-// It is not a C identifier — no C program can define a symbol of this name,
-// which is exactly the point. A crash report reads `-[NSString length]`
-// because that is what Apple's tools name the function.
+// MethodName formats a method's display name, e.g. "-[NSString length]".
 func MethodName(class, category, sel string, classMethod bool) string {
 	sign := "-"
 	if classMethod {
@@ -128,25 +95,8 @@ func MethodName(class, category, sel string, classMethod bool) string {
 	return sign + "[" + class + " " + sel + "]"
 }
 
-// MethodSymbol is what a method's function is *named* in the IR and in the
-// object file.
-//
-// It cannot be MethodName. A VIR symbol is an identifier — letters, digits,
-// underscore and dollar — so the bracketed spelling is not representable,
-// and neither is it representable in an ELF or COFF symbol table without
-// quoting that assemblers disagree about.
-//
-// The mangling is libobjc2's, not an invention: the GNU runtime has always
-// named a method's function `_i_Class__selector` for an instance method and
-// `_c_Class__selector` for a class method, with the category between the two
-// underscores and every colon of the selector written as an underscore. It
-// is unambiguous — a selector's colons are recoverable, since an identifier
-// cannot contain one — and it is what a debugger on a GNUstep system already
-// knows how to read.
-//
-//	-[NSString length]              _i_NSString__length
-//	+[Cache cacheWithCapacity:]     _c_Cache__cacheWithCapacity_
-//	-[Cache(Extra) extra]           _i_Cache_Extra_extra
+// MethodSymbol formats the mangled symbol name for a method's function
+// following the GNU/libobjc2 convention (e.g. "_i_NSString__length").
 func MethodSymbol(class, category, sel string, classMethod bool) string {
 	kind := "_i_"
 	if classMethod {
@@ -215,17 +165,11 @@ const (
 	MsgSendFpret  = "objc_msgSend_fpret"
 	MsgSendFp2ret = "objc_msgSend_fp2ret"
 
-	// MsgSendSuper2 is the super send. The 2 is not a version: it takes the
-	// *class* rather than its superclass and looks the superclass up itself,
-	// which is what lets a category on a superclass be attached after the
-	// subclass was compiled.
+	// MsgSendSuper2 invokes objc_msgSendSuper2 (takes class rather than superclass).
 	MsgSendSuper2      = "objc_msgSendSuper2"
 	MsgSendSuper2Stret = "objc_msgSendSuper2_stret"
 
-	// The ARC entry points. Each is a call lower emits where ownership
-	// changes; none of them is a message send, and that is the point — they
-	// are functions the runtime exports, so a retain is a call and not a
-	// dispatch.
+	// ARC runtime entry points.
 	Retain                        = "objc_retain"
 	Release                       = "objc_release"
 	Autorelease                   = "objc_autorelease"
@@ -240,30 +184,16 @@ const (
 	DestroyWeak                   = "objc_destroyWeak"
 	CopyWeak                      = "objc_copyWeak"
 
-	// CxxDestructSelector is the method objc4 looks up on a class as it
-	// deallocates an object, and calls if it is there. C++ named the hook
-	// and Objective-C borrowed it, because the question is the same one: an
-	// object is going away and its members have to be let go. No program
-	// can write the name, which is what makes it safe to own.
+	// CxxDestructSelector is called during deallocation to release ivars.
 	CxxDestructSelector = ".cxx_destruct"
 
 	AutoreleasePoolPush = "objc_autoreleasePoolPush"
 	AutoreleasePoolPop  = "objc_autoreleasePoolPop"
 
-	// GetProperty is what a synthesized getter calls when the property is
-	// atomic: reading a pointer and retaining it have to happen without a
-	// setter running in between, and the runtime owns the lock that makes
-	// that true.
-	//
-	//	id objc_getProperty(id self, SEL _cmd, ptrdiff_t offset, BOOL atomic);
+	// GetProperty is called by synthesized getters for atomic properties.
 	GetProperty = "objc_getProperty"
 
-	// RetainBlock is what retaining a *block* is, and the difference is not
-	// a detail: a block literal is a stack object, and retaining it has to
-	// copy it to the heap first or the reference outlives the frame. Every
-	// other object is retained with Retain.
-	//
-	//	id objc_retainBlock(id);
+	// RetainBlock retains a block, copying stack blocks to the heap.
 	RetainBlock = "objc_retainBlock"
 
 	// Exceptions (§7.2) and synchronization (§7.3).
@@ -272,17 +202,10 @@ const (
 	SyncEnter        = "objc_sync_enter"
 	SyncExit         = "objc_sync_exit"
 
-	// Personality is the routine the unwinder runs for a frame with a
-	// @try in it. It reads the same Itanium-ABI tables a C++ frame's
-	// personality does; what makes it Objective-C's is how it compares a
-	// thrown object against the type-info a @catch names.
+	// Personality is the unwinder routine for frames containing @try blocks.
 	Personality = "__objc_personality_v0"
 
-	// BeginCatch hands a @catch its object and makes it the exception
-	// being handled; EndCatch says the clause is done with it.
-	//
-	//	id objc_begin_catch(void *exn);
-	//	void objc_end_catch(void);
+	// BeginCatch and EndCatch manage exception handler scope.
 	BeginCatch = "objc_begin_catch"
 	EndCatch   = "objc_end_catch"
 

@@ -10,35 +10,11 @@ import (
 	"github.com/vertex-language/objv/runtime"
 )
 
-// The functions that run around main.
+// Lowering for __attribute__((constructor)) and __attribute__((destructor)).
 //
-// `__attribute__((constructor))` is not in C. It is in every C program that
-// registers something with a library before main gets a chance to, and it is
-// how a unit hooks itself into a program that never names it — which is
-// exactly why ignoring one is the worst thing this package could do with it.
-// A constructor that never runs leaves the registration undone and the
-// program looking for a table entry nobody made, a long way from the
-// attribute that was dropped.
-//
-// The two halves are asymmetric, because the platform is:
-//
-//   - A constructor is a pointer in __DATA,__mod_init_func. dyld calls what
-//     is there before main, in the order it is written, so the list is
-//     sorted by priority (lower first, 65535 when unwritten) and by source
-//     order within a priority.
-//
-//   - A destructor is a registration. Nothing walks a list of them at exit,
-//     so each one is handed to __cxa_atexit from inside a constructor this
-//     package synthesizes, and the C runtime runs them in reverse order of
-//     registration on the way out. clang does the same thing and gives the
-//     synthesized function the same name; the third argument is the image's
-//     __dso_handle, which is what makes unloading a bundle run its
-//     destructors and nobody else's.
-//
-// The priority is a GNU extension on a GNU extension. Darwin's linker does
-// not sort the section, so the sort has to happen here — which means it
-// orders this unit's constructors against each other and says nothing about
-// another unit's. That is the same guarantee clang gives.
+// Constructors are emitted as pointers in __DATA,__mod_init_func sorted by priority
+// (default 65535) and source order.
+// Destructors are registered with __cxa_atexit within a synthesized constructor function.
 
 // defaultInitPriority is what a constructor without one gets. GCC reserves
 // everything below 101 for the implementation, and 65535 is the documented

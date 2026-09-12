@@ -1,22 +1,11 @@
-// Package analyzer is the semantic front end: scopes and namespaces, the
-// class hierarchy, method and property resolution, expression typing, ARC,
-// and the constraint checks the parser deliberately deferred.
+// Package analyzer performs semantic analysis: symbol resolution, type checking,
+// class hierarchy validation, method and property lookup, and ARC verification.
 //
-// It runs in two passes over one translation unit, and the reason is
-// Objective-C rather than taste. A method may send a message to a class
-// declared further down the file, a category may extend a class the file
-// has not reached yet, and a protocol may be adopted before it is declared.
-// C needs no such thing — a name must be declared before it is used — so the
-// first pass exists only to make the second one possible:
+// Analysis runs in two passes:
+//   Pass 1: Collect declarations (@interface, @protocol, @class, categories).
+//   Pass 2: Check definitions, function bodies, and statements in written order.
 //
-//	pass 1  every @interface, @protocol, @class and category, so that the
-//	        hierarchy is complete before any body is read
-//	pass 2  everything else, in written order
-//
-// What the analyzer learns it records in Info, which is the seam lower reads
-// through: the type of every declaration, the method every message send
-// resolves to, the value of every constant expression, the ownership of every
-// object it had to decide.
+// Results are stored in Info for consumption by the lowering phase.
 package analyzer
 
 import (
@@ -29,93 +18,49 @@ import (
 type Mode uint
 
 const (
-	// ARC turns on automatic reference counting: ownership qualifiers are
-	// inferred, the memory-management selectors are refused, and a
-	// conversion between an object pointer and a non-object pointer needs
-	// one of §6.5's bridge casts.
-	//
-	// It is a flag rather than a default because it is one in the language:
-	// -fobjc-arc decides it, __has_feature(objc_arc) reports it, and a
-	// translation unit compiled without it is manual reference counting all
-	// the way down.
+	// ARC enables automatic reference counting analysis.
 	ARC Mode = 1 << iota
 )
 
-// Info is what analysis learned about a tree.
+// Info records semantic information about an AST.
 type Info struct {
-	// Types maps declaring nodes — *ast.InitDeclarator, *ast.ParamDecl,
-	// *ast.FieldDeclarator, *ast.FuncDecl, *ast.TypeName — to the type they
-	// declare or denote, and every expression to its type.
+	// Types maps AST nodes to their declared or computed types.
 	Types map[ast.Node]types.Type
 
-	// Consts maps expressions that were required to be integer constant
-	// expressions, and were, to their values.
+	// Consts maps evaluated integer constant expressions to their values.
 	Consts map[ast.Expr]int64
 
-	// Enums maps every enumerator to its value, implicit or explicit.
+	// Enums maps enumerators to their integer values.
 	Enums map[*ast.Enumerator]int64
 
-	// Sends maps each message expression to the method it resolves to, or
-	// to nil where the receiver's type did not say. A nil entry is not the
-	// same as no entry: it records that the send was checked and the
-	// receiver was id, which is a send the runtime resolves and this
-	// compiler may not.
+	// Sends maps message expressions to resolved methods (or nil for id receivers).
 	Sends map[*ast.MessageExpr]*types.Method
 
-	// Props maps each property access written with dot syntax to the
-	// property it names, so that lower emits the accessor send the source
-	// did not write.
+	// Props maps property accesses to resolved properties.
 	Props map[*ast.MemberExpr]*types.Property
 
-	// Generics maps each _Generic selection to the association's value that
-	// its controlling expression's type selected, or to nil where no
-	// association matched and there was no default — which is an error the
-	// checker has already reported. The selection is a typing question and
-	// the answer belongs to whoever asked it: lower emits the expression
-	// recorded here and never repeats the compatibility walk, so the two
-	// passes cannot disagree about which arm the program runs.
+	// Generics maps _Generic expressions to selected association expressions.
 	Generics map[*ast.GenericExpr]ast.Expr
 
-	// Overloads maps each call's callee identifier to the declaration that
-	// __attribute__((overloadable)) resolution chose, and OverloadIndex
-	// gives every declaration of an overloaded name its position in the
-	// set — the prototype and the definition of one overload sharing a
-	// position, because they are one function.
-	//
-	// Together they are how lower tells the overloads of a name apart:
-	// eighteen functions called simd_abs need eighteen symbols, and which
-	// one a call means was settled here. Like Generics, this records an
-	// answer rather than leaving lower to work it out again — the choice is
-	// a typing question, and two passes that each make it are two passes
-	// that can disagree.
+	// Overloads maps call identifiers to chosen overload declarations.
 	Overloads     map[*ast.Ident]ast.Node
 	OverloadIndex map[ast.Node]int
 
-	// Captures maps each block literal to the variables its body reached
-	// out of its own scopes for, in first-mention order — which is the
-	// order lower lays them out in the block literal, so that the order is
-	// a property of the source and not of a map iteration.
+	// Captures maps block literals to their captured variables in first-seen order.
 	Captures map[*ast.BlockLit][]Capture
 
-	// Classes, Protocols and Selectors are what the unit declared and
-	// mentioned, in first-seen order — the order the runtime metadata is
-	// emitted in.
+	// Classes, Protocols, and Selectors in order of declaration/appearance.
 	Classes   []*types.Class
 	Protocols []*types.Protocol
 	Selectors []string
 }
 
-// Capture is one variable a block literal captured.
-//
-// A block captures by value: the literal holds a copy made where the literal
-// was written, and the body reads that copy. `Block` marks the exception —
-// a variable declared __block is shared rather than copied, and the capture
-// is of a structure the runtime may move to the heap.
+// Capture represents a variable captured by a block literal.
 type Capture struct {
 	Name string
 	Type types.Type
 
-	// Block is set for a variable declared __block.
+	// Block is true if declared with __block (shared by reference).
 	Block bool
 }
 

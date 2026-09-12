@@ -1,29 +1,5 @@
-// Package sysroot answers the question phase 4 cannot: where does this host
-// keep the target's headers, frameworks and libraries?
-//
-// Resolve produces everything a hosted compilation needs from the machine —
-// the include list, the framework list, the library directories, the SDK it
-// found and the deployment target it settled on. The result is data: the objv
-// package turns it into preprocessor.Config and linker arguments, and
-// `objv env` prints it before the build runs.
-//
-// This package imports the standard library only, and is imported by the objv
-// package alone. The preprocessor never learns what an SDK is; this package
-// never learns what a token is.
-//
-// # Why an Objective-C compiler needs more of this than a C compiler
-//
-// A C program can be compiled against no system headers at all. An
-// Objective-C one effectively cannot: the language's own literals are sends
-// to Foundation classes, and the first line of almost every file is
-//
-//	#import <Foundation/Foundation.h>
-//
-// which is not a directory lookup but a framework lookup — Foundation.framework
-// /Headers/Foundation.h — and which reaches some nine hundred headers whose
-// every declaration is gated on a deployment target this package has to
-// determine. That is why Resolve returns a Deployment and an SDK version
-// where a C compiler's would return only paths.
+// Package sysroot resolves target headers, frameworks, libraries, SDKs,
+// and deployment targets for compilation and linking.
 package sysroot
 
 import (
@@ -34,14 +10,7 @@ import (
 	"strings"
 )
 
-// Entry is one resolved include or framework directory: a filesystem, the
-// name a path resolved against it is known by, and whether its headers are
-// the system's rather than the user's.
-//
-// It mirrors preprocessor.Mount field for field, deliberately, but this
-// package does not import preprocessor — the conversion is one loop in the
-// objv package, and it keeps the dependency arrow pointing the right way:
-// sysroot is below the CLI, beside nothing.
+// Entry represents one resolved include or framework directory.
 type Entry struct {
 	Name   string
 	FS     fs.FS
@@ -104,43 +73,15 @@ type Options struct {
 	Deployment Version
 }
 
-// Result is everything Resolve found.
+// Result holds all resolved paths and configuration.
 type Result struct {
-	// Include is the include list, in the order §6.10.2 walks it: objv's
-	// builtin headers first, then the platform's. -I directories precede
-	// all of it and are the CLI's to prepend.
-	Include []Entry
-
-	// Frameworks is the framework search list. -F directories precede it,
-	// again from the CLI.
-	Frameworks []Entry
-
-	// LibraryDirs is where a -l name is looked for, in order.
-	LibraryDirs []string
-
-	// Libraries is the runtime a hosted link gets when the caller named
-	// none. On Darwin that is one name and on GNUstep it is three; see
-	// library.go for why the counts differ.
-	Libraries []string
-
-	// SDK is what was found, and is the zero SDK on a platform that has
-	// none. Its Path is what a Mach-O link passes as -syslibroot: the
-	// headers and the stub libraries have to come from one SDK, and
-	// resolving it twice by two routes is how a machine ends up compiling
-	// against one and failing to link against another.
-	SDK SDK
-
-	// Deployment is the oldest OS this build will run on, which decides
-	// what half of every Cocoa header declares. It is the zero Version
-	// where the platform has no such notion.
-	Deployment Version
-
-	// Notes are worth surfacing when something expected was not found.
-	// They are advice for `objv env` and for diagnostics, never errors: a
-	// host with no SDK still resolves — to the builtins — and the failure
-	// that matters is the #import that does not find its file, reported
-	// there, with this list to point at.
-	Notes []string
+	Include     []Entry    // include search paths in lookup order
+	Frameworks  []Entry    // framework search paths
+	LibraryDirs []string   // library search paths (-L)
+	Libraries   []string   // default runtime libraries (-l)
+	SDK         SDK        // resolved platform SDK
+	Deployment  Version    // target OS deployment version
+	Notes       []string   // informational notes or diagnostic hints
 }
 
 // Resolve reads this machine.
@@ -191,11 +132,7 @@ func resolve(h Host, goos string, opt Options) Result {
 	return r
 }
 
-// dirEntries probes a list of directories in order and mounts the ones that
-// exist. Everything the platform supplies is System: its headers are not the
-// user's code, so a warning sited in one is reported once per header rather
-// than once per inclusion — which matters far more here than in a C compiler,
-// because one #import reaches hundreds of them.
+// dirEntries probes directories in order and mounts existing ones as system headers.
 func dirEntries(h Host, dirs []string) []Entry {
 	var out []Entry
 	for _, dir := range dirs {

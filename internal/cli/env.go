@@ -6,15 +6,8 @@ import (
 	"io"
 )
 
-// cmdEnv prints the resolved configuration: the include and framework lists
-// in the order a directive walks them, the SDK and the deployment target, the
-// link's half, the notes sysroot raised, and — with -defines — the predefined
-// macros.
-//
-// The point is the invariant the READMEs promise: header search is data,
-// inspectable before the build runs. It matters more in Objective-C than in
-// C, because a program that fails to find Foundation fails at its first line
-// and the question is always which of four SDKs it looked in.
+// cmdEnv prints the resolved configuration: include/framework search lists,
+// SDK, deployment target, and (with -defines) predefined macros.
 func cmdEnv(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("env", flag.ContinueOnError)
 	fs.SetOutput(stderr)

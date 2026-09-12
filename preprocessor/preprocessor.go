@@ -1,19 +1,6 @@
-// Package preprocessor implements translation phase 4 for Objective-C:
-// directive execution, macro replacement, and header resolution — C11 §6.10
-// plus the three things Objective-C adds to it, #import, framework includes,
-// and the clang interrogation operators the Cocoa headers gate everything on.
-//
-// The package is a pure function of its Config. It reads fs.FS mounts handed
-// to it and never touches os, so where headers come from is decided in exactly
-// one other place, and phase 4 is testable against fstest.MapFS with no host
-// and no SDK involved.
-//
-// The directive grammar lives here and nowhere else in the tree. On .mi input
-// this package is skipped entirely and a '#' opening a line is trivia.
-//
-// @import (§4.4 of the grammar) is not a preprocessing directive and does not
-// belong to this package: it carries no '#', survives phase 4 as the AT_IMPORT
-// token it was scanned as, and is the parser's to read.
+// Package preprocessor implements translation phase 4: directive execution,
+// macro expansion, and header resolution (C11 §6.10 with #import, framework
+// includes, and clang interrogation operators).
 package preprocessor
 
 import (
@@ -24,9 +11,7 @@ import (
 	"github.com/vertex-language/objv/token"
 )
 
-// Diagnostic is phase 4's diagnostic. It is not token.Diagnostic because a
-// token.Diagnostic is a span with no file, and phase 4's output spans every
-// file the include graph reached.
+// Diagnostic represents a preprocessing diagnostic located at a source Site.
 type Diagnostic struct {
 	Severity token.Severity
 	Site     Site

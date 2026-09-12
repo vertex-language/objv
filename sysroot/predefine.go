@@ -2,27 +2,7 @@ package sysroot
 
 import "strconv"
 
-// The platform's predefined macros.
-//
-// These are the ones that are facts about *this platform, this SDK and this
-// deployment target* — not about the type model, which is types.Model's to
-// state, and not about the language, which is the front end's. The split
-// matters because the platform's spellings are the platform's: __LITTLE_ENDIAN__
-// is an architecture fact written the way Darwin writes it, and nowhere else
-// writes it that way at all.
-//
-// Every one of them is load-bearing in a real build, and each was found by
-// preprocessing <Foundation/Foundation.h> and reading what broke:
-//
-//	__LITTLE_ENDIAN__   CFBase.h and NSByteOrder.h #error without it
-//	__APPLE_CC__        TargetConditionals.h's compiler test, beside __GNUC__
-//	__ENVIRONMENT_...   what every availability macro in every Cocoa header
-//	                    compares against, and therefore what decides whether
-//	                    a method is declared at all
-//
-// The result is spellings, one per macro, in the form -D takes: they go
-// through preprocessor.Config.Predefines and are parsed by the same #define
-// grammar a directive is, so a predefine and a #define cannot drift apart.
+// Predefines returns platform, SDK, and architecture predefined macros in -D format.
 func Predefines(opt Options, r Result) []string {
 	switch osOf(opt.Target) {
 	case "macos":
@@ -39,14 +19,7 @@ func darwinPredefines(opt Options, r Result) []string {
 	out := []string{
 		"__APPLE__=1",
 		"__MACH__=1",
-
-		// clang's value, which is what TargetConditionals.h tests for
-		// beside __GNUC__ and what several headers compare against. It
-		// stopped tracking any real Apple compiler version long ago.
 		"__APPLE_CC__=6000",
-
-		// Mach-O is position-independent and dynamically linked by
-		// default, and a few headers key on both.
 		"__DYNAMIC__=1",
 		"__PIC__=2",
 		"__pic__=2",
@@ -55,20 +28,7 @@ func darwinPredefines(opt Options, r Result) []string {
 	out = append(out, archMacros(archOf(opt.Target))...)
 
 	if !r.Deployment.IsZero() {
-		// The macro every availability check in every Cocoa header reads.
-		// Availability.h turns it into __OSX_AVAILABLE and its family, and
-		// a header whose method is newer than this simply does not declare
-		// it — which is what makes a deployment target a compile-time
-		// thing rather than a note in the Info.plist.
-		//
-		// Both spellings, because AvailabilityInternal.h chooses between
-		// them by asking __has_builtin(__is_target_os): a compiler that has
-		// that builtin is expected to publish the platform-neutral name and
-		// is never asked for the other. objv has the builtin and published
-		// only the other, so __MAC_OS_X_VERSION_MIN_REQUIRED came out as an
-		// undefined identifier — which in a #if is zero, so every
-		// availability comparison in the SDK silently took the branch for
-		// an OS older than anything, and headers declared the wrong things.
+		// Publish both platform-neutral and legacy macOS deployment target macros.
 		v := strconv.Itoa(r.Deployment.MacroValue())
 		out = append(out,
 			"__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__="+v,

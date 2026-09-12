@@ -2,75 +2,12 @@ package preprocessor
 
 import "github.com/vertex-language/objv/token"
 
-// The operators the preprocessor answers for itself.
+// Preprocessor interrogation operators resolved before macro expansion:
+//   - __has_include, __has_include_next: test header availability via search paths.
+//   - __has_feature, __has_extension, __has_attribute, __has_builtin: delegate to Config callbacks.
+//   - __is_target_arch, __is_target_vendor, __is_target_os, __is_target_environment: test target triple.
 //
-// Nine of them, in two shapes. __has_include and __has_include_next take a
-// header name; the rest take a single word. All nine are operators rather
-// than macros, and all nine are resolved in the pass `defined` already had,
-// before expansion -- an operand that is not an expression must not be
-// expanded, and none of these operands is one.
-//
-// # __has_feature, __has_extension and __has_attribute
-//
-// These are how a Cocoa header asks what the compiler reading it can do, and
-// there is no other way it could: the SDK on a Mac is shared by every clang
-// that has shipped in a decade, so nearly every declaration in it is written
-// twice. <Foundation/NSObjCRuntime.h> decides what NS_ENUM means from
-// __has_feature(objc_fixed_enum); <objc/objc.h> and every framework header
-// gate nullability on __has_feature(nullability); NS_DESIGNATED_INITIALIZER
-// is __has_attribute(objc_designated_initializer) and nothing otherwise.
-//
-// A compiler that answered no to all of them would still read the headers --
-// that is the point of the fallbacks -- but it would read a 2011 dialect of
-// them, with no generics, no nullability and no fixed-underlying-type enums,
-// and would then fail to compile the code written against the headers as they
-// actually are.
-//
-// What each answers is not this package's to decide. Config.Feature,
-// Config.Extension and Config.Attribute are supplied by the objv package,
-// which is where a feature is implemented and where the flag that turns it on
-// is read. See Config.
-//
-// # __has_include
-//
-// A header that wants a header it may not have has no other way to ask.
-// Before this existed the question was answered by the build system --
-// configure ran a compile and wrote a macro -- and the SDK on every Mac
-// stopped doing that: Availability.h asks
-//
-//	#if __has_include(<AvailabilityInternalPrivate.h>)
-//
-// on line 199, so a compiler without the operator cannot read <stdlib.h>,
-// and therefore cannot read anything. An Objective-C compiler reaches that
-// header from the first line of the first file it is ever handed:
-// <Foundation/Foundation.h> imports <CoreFoundation/CoreFoundation.h>, which
-// imports <stdlib.h>.
-//
-// It is an operator rather than a macro, and for the same reason `defined`
-// is one: its operand is not an expression. `__has_include(<sys/types.h>)`
-// has a header-name inside it, which phase 3 does not produce and macro
-// expansion must not touch -- expanding it would rewrite `sys`, and the
-// slash and the dot were never tokens at all. So it is resolved before
-// expansion, over the line as written, exactly where `defined` is.
-//
-// The answer is whether an #include written here would find a file. Not
-// whether one exists somewhere: the search list and the including file's own
-// directory are what decide, which is why this asks the same searchList the
-// directive asks. An operator that answered a different question from the
-// directive it guards would be worse than no operator.
-
-// # __is_target_arch and its neighbours
-//
-// A header that wants to know what it is being compiled for has the same
-// problem __has_include solves for files. TargetConditionals.h on every Mac
-// asks all four, gated on __has_builtin, and the answer decides whether
-// TARGET_OS_MACCATALYST or TARGET_OS_SIMULATOR is set -- facts no predefined
-// macro carries because they are about the triple rather than the platform.
-//
-// The operand is one word and is not expanded: `__is_target_arch(arm64)`
-// names an architecture, not a macro, and a program that happened to define
-// `arm64` would otherwise change what it is being compiled for.
-
+// Operands are evaluated directly without macro expansion.
 const (
 	hasInclude     = "__has_include"
 	hasIncludeNext = "__has_include_next"
@@ -84,13 +21,7 @@ const (
 	isTargetEnv    = "__is_target_environment"
 )
 
-// builtinPPMacro reports whether a name is one of the operators the
-// preprocessor answers for itself.
-//
-// `defined(__has_include)` and `#ifdef __has_include` are how a portable
-// header asks whether it may use the operator, so both have to say yes --
-// and neither may be answered by defining a macro of that name, because a
-// macro would be expanded and the operand would be expanded with it.
+// builtinPPMacro reports whether name is a built-in preprocessor operator recognized by defined() and #ifdef.
 func builtinPPMacro(name string) bool {
 	switch name {
 	case hasInclude, hasIncludeNext, hasBuiltin,

@@ -16,15 +16,9 @@ import (
 	"github.com/vertex-language/objv/sysroot"
 )
 
-// linkParams is one link, below VIR.
-//
-// The linker is objv's own: there is no cc on the path, nothing to detect and
-// no host check. The three formats are three vertex-language linkers, each of
-// which takes bytes and returns bytes, which is why an object never has to
-// reach the filesystem to be linked.
+// linkParams specifies inputs, flags, and search paths for linking an executable.
 type linkParams struct {
-	// Objects are the images to link, in the order the caller gave them.
-	// Order is significant and is preserved exactly.
+	// Objects are object files to link in command-line order.
 	Objects []Input
 
 	Output       string
@@ -32,23 +26,13 @@ type linkParams struct {
 	Static       bool
 	Freestanding bool
 
-	// LibDirs and Libs are -L and -l; FrameworkDirs and Frameworks are -F
-	// and -framework. A name is resolved to a file here rather than by the
-	// linker, because only the PE linker has a search path of its own.
-	//
-	// Resolved libraries are added after every object, which is where a
-	// linker expects them: an archive contributes only what something
-	// already in the link needs.
+	// LibDirs/Libs (-L/-l) and FrameworkDirs/Frameworks (-F/-framework).
 	LibDirs       []string
 	Libs          []string
 	FrameworkDirs []string
 	Frameworks    []string
 
-	// The resolved sysroot: the SDK a Mach-O link reads its stubs from, the
-	// platform's own directories, and the deployment target the image
-	// records. It is the same Result the compilation used, passed along
-	// rather than resolved again — the headers and the stub libraries have
-	// to come from one SDK.
+	// Sysroot is the resolved SDK, platform directories, and deployment target.
 	Sysroot sysroot.Result
 }
 

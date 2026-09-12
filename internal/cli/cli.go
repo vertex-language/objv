@@ -1,18 +1,7 @@
-// Package cli implements the objv command line.
+// Package cli implements the objv command-line interface.
 //
-// It is a wrapper. Everything about compiling Objective-C — the phases, the
-// targets, the SDK, the predefines, the link — is the objv package's, and
-// this package is what a command adds to it: flags, where an artifact lands,
-// standard input, the caret under a diagnostic, and an exit code.
-//
-// The rule is that nothing here decides anything a library caller would also
-// have to decide. Two copies of the pipeline is two places for the phases to
-// drift apart, which is the failure mode the phase model exists to prevent —
-// so when a verb needs something the library does not expose, the fix is to
-// expose it, not to reach around.
-//
-// Run is the entire API. Everything else in the package is unexported: the
-// CLI is a consumer of the library, never a library itself.
+// Run is the main entry point, wrapping the core objv compiler pipeline with
+// CLI flag parsing, I/O handling, and diagnostic formatting.
 package cli
 
 import (

@@ -71,7 +71,10 @@ func (u *unit) constScalar(e ast.Expr, t types.Type) (ir.Init, bool) {
 	if v, ok := u.foldInt(e); ok {
 		return ir.Lit(ir.Int(v)), true
 	}
-	if types.IsPointer(t) || types.IsObjectPointer(t) {
+	// A block pointer is a pointer, whatever the language spells it with:
+	// `static void (^once)(void) = nil;` is a null address constant, and
+	// `= ^{ … }` is the address of the literal blockConst emitted above.
+	if types.IsPointer(t) || types.IsObjectPointer(t) || types.IsBlock(t) {
 		return u.constAddress(e)
 	}
 	return ir.Init{}, false
@@ -80,6 +83,17 @@ func (u *unit) constScalar(e ast.Expr, t types.Type) (ir.Init, bool) {
 // constAddress folds an address constant: &x, a function or array name, a
 // string literal, or one of those plus a constant displacement.
 func (u *unit) constAddress(e ast.Expr) (ir.Init, bool) {
+	// A null pointer constant, which is an address constant like any other
+	// and is the one every program writes. §6.3.2.3p3 spells it as an
+	// integer constant expression with the value zero, cast to a pointer or
+	// not, and the platform writes all three: NULL is ((void *)0), nil is
+	// __DARWIN_NULL, and Nil and NULL agree. The cast is stepped through
+	// below, which left the integer underneath it with nowhere to go —
+	// `static int *p = NULL;` was refused at file scope, and so was
+	// `static NSArray *names = nil;` inside a function.
+	if v, ok := u.foldInt(stripParens(e)); ok {
+		return ir.Lit(ir.Int(v)), true
+	}
 	switch e := stripParens(e).(type) {
 	case *ast.UnaryExpr:
 		if e.Op.String() == "&" {

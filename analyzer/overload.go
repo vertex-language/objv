@@ -5,32 +5,10 @@ import (
 	"github.com/vertex-language/objv/types"
 )
 
-// clang's C function overloading.
+// Resolution for __attribute__((overloadable)) functions.
 //
-// `__attribute__((overloadable))` lets one name be declared many times with
-// different parameter lists; which declaration a call means is decided by the
-// arguments. It is not in C and it is not optional on this platform:
-// <simd/simd.h> is built out of it —
-//
-//	static inline SIMD_CFUNC simd_float2 simd_abs(simd_float2 x);
-//	static inline SIMD_CFUNC simd_float3 simd_abs(simd_float3 x);
-//	…
-//
-// eighteen times for simd_abs alone — and <simd/base.h> refuses to define
-// anything at all unless __has_attribute says the compiler has it. SceneKit,
-// Metal, ModelIO and GameplayKit all take their geometry in those types.
-//
-// Resolution here is C's, not C++'s. There are no templates, no references,
-// no user-defined conversions and no partial ordering, so what is left is a
-// score per argument:
-//
-//	an exact match after lvalue conversion   2
-//	an assignment the language allows        1
-//	anything else                            the candidate is out
-//
-// The best total wins. A tie between two candidates is ambiguous and is
-// reported as one — not resolved by declaration order, which would make the
-// answer depend on which header was read first.
+// Overload candidates are scored based on argument conversions (exact match = 2,
+// compatible conversion = 1, incompatible = 0). Ties are reported as ambiguous calls.
 
 // overloadSet is the candidates a name stands for, or nil when it is an
 // ordinary function.

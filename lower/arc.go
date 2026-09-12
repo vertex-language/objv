@@ -9,40 +9,10 @@ import (
 	"github.com/vertex-language/objv/types"
 )
 
-// Automatic reference counting: the retains and releases the program did not
-// write.
-//
-// ARC is not a garbage collector and not a rewrite. It is a set of rules
-// about where *ownership* changes, and every one of the calls below is
-// placed at a point where it does. The analyzer decided the ownership —
-// every object variable has a lifetime, most programs write none, and §5.6's
-// default is __strong — and this places the operations that keep it true.
-//
-// Two facts do all the work.
-//
-// The first is that an object rvalue is either *owned* — the expression
-// produced it at +1, and somebody has to release it — or *borrowed*, valid
-// only for as long as whatever is holding it holds it. Which one is decided
-// by the selector's name, and the naming convention is normative: alloc,
-// copy, init, mutableCopy and new return an object the caller owns, and
-// every other method returns one it does not. runtime.FamilyOf is that rule.
-//
-// The second is that an owned value nobody takes has to be released at the
-// end of the full expression. So every owned value is registered as it is
-// produced, and a context that *takes* ownership — initializing a __strong
-// variable, assigning to one, returning from a method that returns +1 —
-// takes it back off the register instead. What is left at the end of the
-// statement is what nothing wanted.
-//
-// That is the whole mechanism. `[[Box alloc] init]` registers alloc's +1,
-// init consumes its receiver and registers its own, and the declaration it
-// initializes takes that one — so the object is retained once, by the
-// variable, and released once, when the variable goes out of scope.
-//
-// What is not here: __weak, which is refused rather than approximated,
-// because a zeroing weak reference is the runtime's side table and not a
-// call this could place; and the optimizations clang applies to the pairs it
-// can prove redundant, which cost instructions and not correctness.
+// ARC lowering places retain and release calls based on ownership rules:
+//   - Object rvalues are either owned (+1 from alloc/copy/init/new per runtime.FamilyOf) or borrowed.
+//   - Owned temporaries not consumed by an assignment or return are released at the end of the full expression.
+//   - __strong local variables are released when their scope exits.
 
 // arcOn reports whether ownership operations are emitted at all.
 func (u *unit) arcOn() bool { return u.arc && u.fn != nil && u.at() }

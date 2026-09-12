@@ -1,27 +1,9 @@
 package lower
 
-// §7.4's inline assembly, as far as a header needs it.
+// Lowering for inline assembly (§7.4).
 //
-// The body of an `__asm__` is a balanced token sequence the parser kept and
-// nobody has read: its shape is GCC's, which is a template string and up to
-// four colon-separated sections after it —
-//
-//	__asm__ __volatile__ ( "template" : outputs : inputs : clobbers : labels )
-//
-// What is lowered here is the form with no operands. That is not a corner:
-// it is what a *header* contains, and a header is the reason a compiler
-// meets inline assembly at all before it meets a program that wants it.
-// <dispatch/once.h> is the case — dispatch_once's fast path ends in
-//
-//	#define dispatch_compiler_barrier()  __asm__ __volatile__("" ::: "memory")
-//
-// which assembles to nothing and exists only to stop the optimizer moving a
-// load across it. An empty template with a memory clobber is the whole of
-// it, and refusing it means refusing dispatch_once.
-//
-// An operand needs a constraint mapped onto the target's register classes,
-// which is a table this package does not have; a statement with one is
-// refused by name, and the refusal says which part it could not do.
+// Supports basic/operandless inline assembly (such as compiler memory barriers).
+// Extended inline assembly with operand register constraints is reported as unsupported.
 
 import (
 	"strings"
