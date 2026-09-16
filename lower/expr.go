@@ -925,6 +925,9 @@ func (u *unit) conditional(e *ast.CondExpr, t types.Type) ir.Value {
 	if c == nil {
 		return nil
 	}
+	if isAggregate(t) {
+		return u.aggregateConditional(e, t, *c)
+	}
 	thenB, elseB, done := u.block("cond.then"), u.block("cond.else"), u.block("cond.done")
 
 	void := types.IsVoid(t)
@@ -959,6 +962,41 @@ func (u *unit) conditional(e *ast.CondExpr, t types.Type) ir.Value {
 	}
 	u.fn.cur = done
 	return res
+}
+
+// aggregateConditional lowers ?: whose arms are structs or unions:
+// `hasMarked ? NSMakeRange(0, n) : NSMakeRange(NSNotFound, 0)`.
+//
+// An aggregate is held by address, and no register carries one from an arm
+// to the join. So the result is storage of its own, each arm copies its
+// value into it, and that storage is the value of the whole expression --
+// which is also what makes it a fresh object rather than an alias of
+// whichever arm ran.
+func (u *unit) aggregateConditional(e *ast.CondExpr, t types.Type, c ir.I1) ir.Value {
+	slot := u.aggSlot(t, "cond")
+	thenB, elseB, done := u.block("cond.then"), u.block("cond.else"), u.block("cond.done")
+	u.fn.cur.BrIf(c, thenB.To(), elseB.To())
+
+	arm := func(b *ir.Block, x ast.Expr) {
+		u.fn.cur = b
+		v := u.rvalue(x)
+		if !u.at() {
+			return
+		}
+		if v != nil {
+			src, ok := v.(ir.Ptr)
+			if !ok {
+				u.errorf(x, "internal: an aggregate arm is not an address")
+				return
+			}
+			u.copyAggregate(slot, src, t)
+		}
+		u.fn.cur.Br(done.To())
+	}
+	arm(thenB, e.Then)
+	arm(elseB, e.Else)
+	u.fn.cur = done
+	return slot
 }
 
 // binaryConditional lowers GCC's `a ?: b`.
