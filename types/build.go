@@ -24,6 +24,34 @@ type Resolver interface {
 	TypeOf(e ast.Expr) Type
 }
 
+// ARCResolver is a Resolver that knows whether the unit is compiled with
+// automatic reference counting, which changes what an unqualified
+// parameter type means. See AutoreleasingIndirect.
+type ARCResolver interface {
+	ARC() bool
+}
+
+// AutoreleasingIndirect is ARC §4.4.2's inference for a parameter: a pointer
+// to an object pointer that says nothing about its ownership points at an
+// __autoreleasing one. `NSError **error` is `NSError * __autoreleasing *`,
+// which is what makes `*error = …` hand the object to the pool rather than
+// to a frame that is about to end.
+func AutoreleasingIndirect(t Type) Type {
+	p, ok := t.(*Pointer)
+	q, isQ := t.(*Qualified)
+	if isQ {
+		p, ok = q.T.(*Pointer)
+	}
+	if !ok || !IsObjCObject(p.Elem) || LifetimeOf(p.Elem) != LifeNone {
+		return t
+	}
+	np := &Pointer{Elem: WithLifetime(p.Elem, LifeAutoreleasing)}
+	if isQ {
+		return &Qualified{Q: q.Q, Life: q.Life, Null: q.Null, T: np}
+	}
+	return np
+}
+
 // Spec represents declaration specifiers: a qualified type plus storage and attributes.
 type Spec struct {
 	Attrs       []*ast.Attr
@@ -511,6 +539,9 @@ func (b *builder) buildParams(fn *Func, d *ast.FuncDeclarator) {
 			t = Typ(Int)
 		}
 		t = AdjustParam(t)
+		if a, ok := b.r.(ARCResolver); ok && a.ARC() {
+			t = AutoreleasingIndirect(t)
+		}
 		name := ""
 		if id != nil {
 			name = id.Name(b.unit)

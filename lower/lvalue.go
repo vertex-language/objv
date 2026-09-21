@@ -140,9 +140,9 @@ func (u *unit) indexAddr(e *ast.IndexExpr) (*ir.Ptr, types.Type) {
 	if off == nil {
 		return nil, nil
 	}
-	size, _ := u.sizeAlign(elem)
+	size := u.elemBytes(elem)
 	b := u.fn.cur
-	at := b.Ptr.Add(p, b.I64.Mul(*off, b.I64.Const(int64(size))))
+	at := b.Ptr.Add(p, b.I64.Mul(*off, size))
 	return &at, elem
 }
 

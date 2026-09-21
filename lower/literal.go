@@ -151,6 +151,17 @@ func (u *unit) boxed(e *ast.BoxedExpr, t types.Type) ir.Value {
 	if lit, ok := stripParens(e.X).(*ast.BasicLit); ok && lit.Kind == token.BOOL_LIT {
 		class, sel = "NSNumber", "numberWithBool:"
 	}
+	// A struct marked objc_boxable boxes as an NSValue of its bytes and
+	// its encoding, which is what clang sends: the value is held by
+	// address here, so the address is already the bytes' pointer.
+	if class == "" && types.IsRecord(xt) {
+		v, ok := u.rvalue(e.X).(ir.Ptr)
+		if !ok {
+			return nil
+		}
+		enc := u.cstring(u.abi.Encode(xt, u.model))
+		return u.sendToClass("NSValue", "valueWithBytes:objCType:", []ir.Value{v, enc}, t, e)
+	}
 	if class == "" {
 		u.unsupported(e, "boxing a value of type "+xt.String())
 		return nil
@@ -169,8 +180,16 @@ func boxingMethod(t types.Type) (string, string) {
 	if types.IsBool(t) {
 		return "NSNumber", "numberWithBool:"
 	}
+	// A C string, as a pointer or as the array a literal or a buffer is:
+	// the array decays to the pointer stringWithUTF8String: takes.
+	var elem types.Type
 	if p := types.AsPointer(types.Unqualify(t)); p != nil {
-		switch types.Unqualify(p.Elem).Kind() {
+		elem = p.Elem
+	} else if a := types.AsArray(types.Unqualify(t)); a != nil {
+		elem = a.Elem
+	}
+	if elem != nil {
+		switch types.Unqualify(elem).Kind() {
 		case types.Char, types.SChar, types.UChar:
 			return "NSString", "stringWithUTF8String:"
 		}

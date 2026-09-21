@@ -75,8 +75,12 @@ func (u *unit) declareByref(name string, t types.Type, it *ast.InitDeclarator) *
 	cur.I32.Store(cur.I32.Const(int64(int32(flags))), at("flags"))
 	cur.I32.Store(cur.I32.Const(size), at("size"))
 	if helpers {
-		cur.Ptr.Store(cur.Ptr.GetAddr(u.byrefCopyHelper(off)), at("byref_keep"))
-		cur.Ptr.Store(cur.Ptr.GetAddr(u.byrefDisposeHelper(off)), at("byref_destroy"))
+		keep, destroy := u.byrefCopyHelper(off), u.byrefDisposeHelper(off)
+		if u.arc && u.isStrong(t) {
+			keep, destroy = u.byrefStrongCopyHelper(off), u.byrefStrongDisposeHelper(off)
+		}
+		cur.Ptr.Store(cur.Ptr.GetAddr(keep), at("byref_keep"))
+		cur.Ptr.Store(cur.Ptr.GetAddr(destroy), at("byref_destroy"))
 
 		// And the variable itself is nil, before anything reads it.
 		//
@@ -94,8 +98,40 @@ func (u *unit) declareByref(name string, t types.Type, it *ast.InitDeclarator) *
 	}
 
 	u.bind(name, &storage{kind: stByref, typ: t, addr: b.slot, byref: b})
-	u.fn.byrefs = append(u.fn.byrefs, b.slot)
+	u.noteByrefLocal(b)
 	return b
+}
+
+// noteByrefLocal registers a __block structure with the innermost ARC scope,
+// whose end is the variable's: see endLocal. Per scope and not per function,
+// so that a __block variable declared in a loop body is let go every
+// iteration, the way each iteration's is a new variable.
+func (u *unit) noteByrefLocal(b *byref) {
+	if u.fn == nil || len(u.fn.strongs) == 0 {
+		return
+	}
+	n := len(u.fn.strongs) - 1
+	u.fn.strongs[n] = append(u.fn.strongs[n], strongLocal{addr: b.slot, typ: b.typ, byref: b})
+}
+
+// endByref is a __block variable's scope ending. Under ARC a __strong one
+// owns its object in the structure on the stack -- or did, until a copy
+// moved it to the heap and left nil behind -- so that is released first;
+// then the structure goes back to the runtime, which drops the heap copy's
+// reference if a block took one.
+func (u *unit) endByref(b *byref) {
+	if u.arc && u.isStrong(b.typ) {
+		payload := b.slot
+		if b.off != 0 {
+			payload = u.fn.cur.Ptr.Add(b.slot, u.fn.cur.I64.Const(b.off))
+		}
+		u.release(u.fn.cur.Ptr.Load(payload))
+	}
+	sig := ir.NewSig()
+	sig.Param(ir.TypePtr)
+	sig.Param(ir.TypeI32)
+	u.fn.cur.Call(u.extern(runtime.BlockObjectDispose, sig), b.slot,
+		u.fn.cur.I32.Const(runtime.BlockFieldByref))
 }
 
 // byrefLayoutFlag is the high nibble of a byref's flags: what the runtime
@@ -127,23 +163,6 @@ func (u *unit) byrefAddr(b *byref, slot ir.Ptr) ir.Ptr {
 		return fwd
 	}
 	return cur.Ptr.Add(fwd, cur.I64.Const(b.off))
-}
-
-// releaseByrefs hands every __block structure in this function back to the
-// runtime, which is what frees the heap copy a _Block_copy made. On a
-// structure nothing copied it does nothing, so the call is unconditional and
-// the compiler does not have to know which happened.
-func (u *unit) releaseByrefs() {
-	if !u.at() || len(u.fn.byrefs) == 0 {
-		return
-	}
-	sig := ir.NewSig()
-	sig.Param(ir.TypePtr)
-	sig.Param(ir.TypeI32)
-	dispose := u.extern(runtime.BlockObjectDispose, sig)
-	for i := len(u.fn.byrefs) - 1; i >= 0; i-- {
-		u.fn.cur.Call(dispose, u.fn.byrefs[i], u.fn.cur.I32.Const(runtime.BlockFieldByref))
-	}
 }
 
 // byrefCopyHelper and byrefDisposeHelper are the structure's own helpers,
@@ -206,6 +225,47 @@ func (u *unit) byrefDisposeHelper(off int64) ir.Symbol {
 	b.Call(u.extern(runtime.BlockObjectDispose, sig),
 		b.Ptr.Load(b.Ptr.Add(src, b.I64.Const(off))),
 		b.I32.Const(runtime.BlockFieldObject|runtime.BlockByrefCaller))
+	b.Return()
+	u.byrefHelpers[name] = fn
+	return fn
+}
+
+// byrefStrongCopyHelper and byrefStrongDisposeHelper are ARC's helpers for a
+// __block __strong object. The copy *moves* the object into the heap
+// structure -- the stack one is left holding nil, which is what its scope's
+// end then releases -- and the dispose releases it. The 0x83 helpers above
+// are manual reference counting's, which neither retain nor release: under
+// ARC they left the object owned by nobody, and never freed.
+func (u *unit) byrefStrongCopyHelper(off int64) ir.Symbol {
+	name := runtime.BlockByrefCopySymbol(int(off)) + "_strong"
+	if sym, ok := u.byrefHelpers[name]; ok {
+		return sym
+	}
+	fn := u.mod.Func(u.sym(name))
+	fn.Internal()
+	dst := fn.ParamPtr("dst")
+	src := fn.ParamPtr("src")
+	b := fn.Entry()
+	from := b.Ptr.Add(src, b.I64.Const(off))
+	b.Ptr.Store(b.Ptr.Load(from), b.Ptr.Add(dst, b.I64.Const(off)))
+	b.Ptr.Store(b.Ptr.Const(), from)
+	b.Return()
+	u.byrefHelpers[name] = fn
+	return fn
+}
+
+func (u *unit) byrefStrongDisposeHelper(off int64) ir.Symbol {
+	name := runtime.BlockByrefDisposeSymbol(int(off)) + "_strong"
+	if sym, ok := u.byrefHelpers[name]; ok {
+		return sym
+	}
+	fn := u.mod.Func(u.sym(name))
+	fn.Internal()
+	src := fn.ParamPtr("src")
+	b := fn.Entry()
+	sig := ir.NewSig()
+	sig.Param(ir.TypePtr)
+	b.Call(u.extern(runtime.Release, sig), b.Ptr.Load(b.Ptr.Add(src, b.I64.Const(off))))
 	b.Return()
 	u.byrefHelpers[name] = fn
 	return fn

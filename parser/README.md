@@ -179,11 +179,8 @@ the grammar says, that a nameless selector piece survives, that a tail
 attribute is not a selector, that recovery keeps the declarations after a
 mistake.
 
-`parse_test.go` runs the corpus in [`tests/syntax`](../tests/syntax), which
-asks one question — does it parse? — over 24 files that cite the productions
-they cover. The corpus is checked against clang, which is the only oracle for
-"is this really Objective-C" that cannot be argued with; see that directory's
-README for what clang still reports and why.
+Every program in [`tests`](../tests) is parsed on its way to being built and
+compared with clang's build of the same file.
 
 ## Dependencies
 

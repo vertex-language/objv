@@ -270,23 +270,17 @@ func (u *unit) bitFieldMember(e *ast.MemberExpr) (ir.Ptr, bitField, bool) {
 		return ir.Ptr{}, bitField{}, false
 	}
 
-	var base ir.Ptr
+	// Which record, and whether the member is a bit-field, are questions
+	// about types: they are answered before the operand is evaluated, and
+	// the operand only for a member that is one. Evaluating it to find out
+	// ran `f().x`'s call twice -- once here, once for the ordinary read.
 	var rec *types.Record
 	if e.Op == token.ARROW {
-		p, ok := u.rvalue(e.X).(ir.Ptr)
-		if !ok {
-			return ir.Ptr{}, bitField{}, false
-		}
-		base = p
 		if pt := types.AsPointer(xt); pt != nil {
 			rec = types.AsRecord(pt.Elem)
 		}
 	} else {
-		addr, at := u.lvalue(e.X)
-		if addr == nil {
-			return ir.Ptr{}, bitField{}, false
-		}
-		base, rec = *addr, types.AsRecord(at)
+		rec = types.AsRecord(xt)
 	}
 	if rec == nil {
 		return ir.Ptr{}, bitField{}, false
@@ -294,6 +288,20 @@ func (u *unit) bitFieldMember(e *ast.MemberExpr) (ir.Ptr, bitField, bool) {
 	bf, ok := u.bitFieldOf(rec, u.name(e.Sel))
 	if !ok {
 		return ir.Ptr{}, bitField{}, false
+	}
+	var base ir.Ptr
+	if e.Op == token.ARROW {
+		p, ok := u.rvalue(e.X).(ir.Ptr)
+		if !ok {
+			return ir.Ptr{}, bitField{}, false
+		}
+		base = p
+	} else {
+		addr, _ := u.lvalue(e.X)
+		if addr == nil {
+			return ir.Ptr{}, bitField{}, false
+		}
+		base = *addr
 	}
 	return base, bf, true
 }

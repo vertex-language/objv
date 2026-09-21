@@ -46,7 +46,15 @@ func (u *unit) initScalarOrCopy(addr ir.Ptr, t types.Type, init ast.Expr) {
 	}
 	if isAggregate(t) {
 		if p, ok := u.rvalue(init).(ir.Ptr); ok {
-			u.copyAggregate(addr, p, t)
+			if u.isARCRecord(t) {
+				if u.takeRecordTemp(p) {
+					u.copyAggregate(addr, p, t) // moved: the bytes, and the ownership
+				} else {
+					u.copyConstruct(addr, p, t)
+				}
+			} else {
+				u.copyAggregate(addr, p, t)
+			}
 		}
 		return
 	}
@@ -60,6 +68,22 @@ func (u *unit) initScalarOrCopy(addr ir.Ptr, t types.Type, init ast.Expr) {
 	// declaration, so the array held an address that had already been
 	// freed -- a use-after-free that reads back fine until something else
 	// takes the memory.
+	if u.arcOn() && u.isWeak(t) {
+		// A __weak member of an aggregate being initialized: registered
+		// with the runtime, never retained.
+		var v ir.Value
+		if r := u.rvalue(init); r != nil {
+			v = u.convert(r, u.typeOf(init), t)
+		}
+		u.initWeak(addr, v)
+		return
+	}
+	if v, ok := u.nonOwningValue(init, t); ok {
+		if v != nil {
+			u.storeTo(addr, v, t)
+		}
+		return
+	}
 	if u.arcOn() && objectValued(t) {
 		u.initStrong(addr, t, init)
 		return

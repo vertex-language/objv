@@ -604,6 +604,9 @@ func (c *checker) blockType(e *ast.BlockLit) types.Type {
 		sp := types.BuildSpecs(c.unit, p.Specs, c)
 		t, id := types.BuildDeclarator(c.unit, sp.Type, p.Decl, true, c)
 		t = types.AdjustParam(t)
+		if c.arc() {
+			t = types.AutoreleasingIndirect(t)
+		}
 		if id != nil {
 			c.declare(id, &symbol{kind: symObject, typ: t, node: p})
 		}

@@ -4,6 +4,7 @@ import (
 	"github.com/vertex-language/ir"
 	"github.com/vertex-language/objv/analyzer"
 	"github.com/vertex-language/objv/ast"
+	"github.com/vertex-language/objv/token"
 	"github.com/vertex-language/objv/types"
 )
 
@@ -81,8 +82,141 @@ func (u *unit) constScalar(e ast.Expr, t types.Type) (ir.Init, bool) {
 }
 
 // constAddress folds an address constant: &x, a function or array name, a
-// string literal, or one of those plus a constant displacement.
+// string literal, or one of those plus a constant displacement -- &arr[2],
+// &s.field, arr + 1, &p->v[3].x -- which becomes the symbol's relocation
+// with an addend.
 func (u *unit) constAddress(e ast.Expr) (ir.Init, bool) {
+	base, off, ok := u.constAddressOff(e)
+	if !ok {
+		return ir.Init{}, false
+	}
+	if off == 0 {
+		return base, true
+	}
+	if base.Kind() != ir.InitRelocKind {
+		return ir.Init{}, false
+	}
+	return base.Plus(ir.Int(off)), true
+}
+
+// constAddressOff is an address constant as a base and a byte displacement.
+func (u *unit) constAddressOff(e ast.Expr) (ir.Init, int64, bool) {
+	switch x := stripParens(e).(type) {
+	case *ast.UnaryExpr:
+		if x.Op.String() == "&" {
+			return u.constPlace(x.X)
+		}
+	case *ast.CastExpr:
+		return u.constAddressOff(x.X)
+	case *ast.BinaryExpr:
+		op := x.Op.String()
+		if op != "+" && op != "-" {
+			break
+		}
+		ptr, idx := x.X, x.Y
+		if !u.addressLike(u.typeOf(ptr)) {
+			if op == "-" {
+				break
+			}
+			ptr, idx = x.Y, x.X
+		}
+		elem := u.pointee(u.typeOf(ptr))
+		n, ok := u.foldInt(idx)
+		if elem == nil || !ok {
+			break
+		}
+		base, off, ok := u.constAddressOff(ptr)
+		if !ok {
+			break
+		}
+		size, _ := u.sizeAlign(elem)
+		if op == "-" {
+			n = -n
+		}
+		return base, off + n*int64(size), true
+	}
+	init, ok := u.constAddressBase(e)
+	return init, 0, ok
+}
+
+// constPlace is the address of an lvalue whose address is a constant: an
+// object with static storage, or an element or member of one.
+func (u *unit) constPlace(e ast.Expr) (ir.Init, int64, bool) {
+	switch x := stripParens(e).(type) {
+	case *ast.IndexExpr:
+		n, ok := u.foldInt(x.Index)
+		if !ok {
+			break
+		}
+		var base ir.Init
+		var off int64
+		var elem types.Type
+		bt := u.typeOf(x.X)
+		if a := types.AsArray(bt); a != nil {
+			base, off, ok = u.constPlace(x.X)
+			elem = a.Elem
+		} else if p := types.AsPointer(bt); p != nil {
+			base, off, ok = u.constAddressOff(x.X)
+			elem = p.Elem
+		} else {
+			break
+		}
+		if !ok {
+			break
+		}
+		size, _ := u.sizeAlign(elem)
+		return base, off + n*int64(size), true
+	case *ast.MemberExpr:
+		var base ir.Init
+		var off int64
+		var ok bool
+		var rec *types.Record
+		xt := u.typeOf(x.X)
+		if x.Op == token.ARROW {
+			if p := types.AsPointer(xt); p != nil {
+				rec = types.AsRecord(p.Elem)
+			}
+			base, off, ok = u.constAddressOff(x.X)
+		} else {
+			rec = types.AsRecord(xt)
+			base, off, ok = u.constPlace(x.X)
+		}
+		if rec == nil || !ok {
+			break
+		}
+		fo, ok := u.model.Offsetof(rec, u.name(x.Sel))
+		if !ok {
+			break
+		}
+		return base, off + fo, true
+	case *ast.UnaryExpr:
+		if x.Op.String() == "*" {
+			return u.constAddressOff(x.X)
+		}
+	}
+	init, ok := u.constAddressBase(e)
+	return init, 0, ok
+}
+
+// addressLike reports whether a value of t is an address in arithmetic: a
+// pointer, or an array that decays to one.
+func (u *unit) addressLike(t types.Type) bool {
+	return t != nil && (types.IsPointer(t) || types.IsArray(t))
+}
+
+// pointee is what a pointer or a decayed array points at.
+func (u *unit) pointee(t types.Type) types.Type {
+	if p := types.AsPointer(t); p != nil {
+		return p.Elem
+	}
+	if a := types.AsArray(t); a != nil {
+		return a.Elem
+	}
+	return nil
+}
+
+// constAddressBase is an address constant with no displacement.
+func (u *unit) constAddressBase(e ast.Expr) (ir.Init, bool) {
 	// A null pointer constant, which is an address constant like any other
 	// and is the one every program writes. §6.3.2.3p3 spells it as an
 	// integer constant expression with the value zero, cast to a pointer or
@@ -97,7 +231,7 @@ func (u *unit) constAddress(e ast.Expr) (ir.Init, bool) {
 	switch e := stripParens(e).(type) {
 	case *ast.UnaryExpr:
 		if e.Op.String() == "&" {
-			return u.constAddress(e.X)
+			return u.constAddressBase(e.X)
 		}
 	case *ast.Ident:
 		st := u.lookup(u.name(e))
@@ -111,7 +245,7 @@ func (u *unit) constAddress(e ast.Expr) (ir.Init, bool) {
 			return ir.RelocInit(sym), true
 		}
 	case *ast.CastExpr:
-		return u.constAddress(e.X)
+		return u.constAddressBase(e.X)
 	case *ast.CompoundLit:
 		return u.compoundConst(e)
 	}

@@ -17,6 +17,15 @@ import (
 
 // rvalue lowers an expression to its value.
 func (u *unit) rvalue(e ast.Expr) ir.Value {
+	v := u.rvalueExpr(e)
+	if !u.at() {
+		return v
+	}
+	return u.claimResult(e, v)
+}
+
+// rvalueExpr is rvalue before ARC claims a call's result. See claimResult.
+func (u *unit) rvalueExpr(e ast.Expr) ir.Value {
 	if e == nil || !u.at() {
 		return nil
 	}
@@ -79,7 +88,7 @@ func (u *unit) rvalue(e ast.Expr) ir.Value {
 			// evaluated where it is written and yields the size that object
 			// actually has. sizeAlign would answer with a pointer's width,
 			// which is what an array of n elements is not.
-			if isVLA(inner) {
+			if isVariablySized(inner) {
 				if v, ok := u.vlaBytes(e.X); ok {
 					return u.convert(v, u.model.SizeType(), t)
 				}
@@ -831,13 +840,12 @@ func (u *unit) ptrArith(e *ast.BinaryExpr, pt types.Type) ir.Value {
 		return nil
 	}
 	elem := types.AsPointer(pt).Elem
-	size, _ := u.sizeAlign(elem)
-	b := u.fn.cur
 	off := u.toI64(n)
 	if off == nil {
 		return nil
 	}
-	scaled := b.I64.Mul(*off, b.I64.Const(int64(size)))
+	b := u.fn.cur
+	scaled := b.I64.Mul(*off, u.elemBytes(elem))
 	if e.Op == token.SUB {
 		return b.Ptr.Sub(ptr, scaled)
 	}
@@ -855,6 +863,9 @@ func (u *unit) ptrCompareOrDiff(e *ast.BinaryExpr, x, y ir.Value, t types.Type) 
 	if e.Op == token.SUB {
 		diff := b.Ptr.Diff(a, c)
 		elem := types.AsPointer(u.typeOf(e.X))
+		if elem != nil && isVariablySized(elem.Elem) {
+			return b.I64.SDiv(diff, u.elemBytes(elem.Elem))
+		}
 		size := int64(1)
 		if elem != nil {
 			s, _ := u.sizeAlign(elem.Elem)
@@ -887,10 +898,14 @@ func (u *unit) ptrCompareOrDiff(e *ast.BinaryExpr, x, y ir.Value, t types.Type) 
 // shortCircuit lowers && and ||, which are the two operators that are
 // control flow rather than arithmetic.
 func (u *unit) shortCircuit(e *ast.BinaryExpr, t types.Type) ir.Value {
+	// Each operand's temporaries go where its truth is known: only the
+	// truth leaves it, and the right one runs on one path only.
+	mark := u.tempMark()
 	lhs := u.truth(e.X)
 	if lhs == nil {
 		return nil
 	}
+	u.releaseTempsSince(mark)
 	rhsBlk := u.block("cond.rhs")
 	done := u.block("cond.done")
 	res := done.ParamI32("v")
@@ -908,6 +923,7 @@ func (u *unit) shortCircuit(e *ast.BinaryExpr, t types.Type) ir.Value {
 	if rhs == nil {
 		return nil
 	}
+	u.releaseTempsSince(mark)
 	rb := u.fn.cur
 	rb.Br(done.To(rb.I32.ZExtI1(*rhs)))
 
@@ -921,10 +937,12 @@ func (u *unit) conditional(e *ast.CondExpr, t types.Type) ir.Value {
 	if e.Then == nil {
 		return u.binaryConditional(e, t)
 	}
+	mark := u.tempMark()
 	c := u.truth(e.Cond)
 	if c == nil {
 		return nil
 	}
+	u.releaseTempsSince(mark)
 	if isAggregate(t) {
 		return u.aggregateConditional(e, t, *c)
 	}
@@ -943,25 +961,52 @@ func (u *unit) conditional(e *ast.CondExpr, t types.Type) ir.Value {
 	u.fn.cur.BrIf(*c, thenB.To(), elseB.To())
 
 	u.fn.cur = thenB
-	tv := u.rvalue(e.Then)
-	if u.at() {
-		if void {
-			u.fn.cur.Br(done.To())
-		} else if tv != nil {
-			u.fn.cur.Br(done.To(u.convert(tv, u.typeOf(e.Then), t)))
-		}
-	}
+	u.condArm(e.Then, t, void, done)
 	u.fn.cur = elseB
-	ev := u.rvalue(e.Else)
-	if u.at() {
-		if void {
-			u.fn.cur.Br(done.To())
-		} else if ev != nil {
-			u.fn.cur.Br(done.To(u.convert(ev, u.typeOf(e.Else), t)))
+	u.condArm(e.Else, t, void, done)
+	u.fn.cur = done
+	if u.condOwns(t) {
+		u.owns(res)
+	}
+	return res
+}
+
+// condOwns reports whether a conditional of type t yields an object it owns:
+// under ARC each arm hands on +1, since what one arm made cannot be released
+// after the arms meet, and the result is a temporary like a call's.
+func (u *unit) condOwns(t types.Type) bool {
+	return u.arcOn() && objectValued(t) && !u.isWeak(t)
+}
+
+// condArm lowers one arm of ?: and branches to done with its value. The
+// arm's temporaries end with the arm.
+func (u *unit) condArm(x ast.Expr, t types.Type, void bool, done *ir.Block) {
+	mark := u.tempMark()
+	var v ir.Value
+	if u.condOwns(t) {
+		var owned bool
+		v, owned = u.rvalueOwned(x)
+		if v != nil {
+			v = u.convert(v, u.typeOf(x), t)
+			if !owned {
+				v = u.retain(v, t)
+			}
+		}
+	} else {
+		v = u.rvalue(x)
+		if v != nil && !void {
+			v = u.convert(v, u.typeOf(x), t)
 		}
 	}
-	u.fn.cur = done
-	return res
+	u.releaseTempsSince(mark)
+	if !u.at() {
+		return
+	}
+	if void {
+		u.fn.cur.Br(done.To())
+	} else if v != nil {
+		u.fn.cur.Br(done.To(v))
+	}
 }
 
 // aggregateConditional lowers ?: whose arms are structs or unions:
@@ -1006,7 +1051,18 @@ func (u *unit) aggregateConditional(e *ast.CondExpr, t types.Type, c ir.I1) ir.V
 // `[self cached] ?: [self compute]` must not compute twice when the cache
 // hit. So the value is taken once, tested, and handed to the true edge.
 func (u *unit) binaryConditional(e *ast.CondExpr, t types.Type) ir.Value {
-	v := u.rvalue(e.Cond)
+	mark := u.tempMark()
+	owns := u.condOwns(t)
+	var v ir.Value
+	if owns {
+		var owned bool
+		v, owned = u.rvalueOwned(e.Cond)
+		if v != nil && !owned {
+			v = u.retain(v, t)
+		}
+	} else {
+		v = u.rvalue(e.Cond)
+	}
 	if v == nil {
 		return nil
 	}
@@ -1015,6 +1071,7 @@ func (u *unit) binaryConditional(e *ast.CondExpr, t types.Type) ir.Value {
 	if c == nil {
 		return nil
 	}
+	u.releaseTempsSince(mark)
 	thenB, elseB, done := u.block("cond.then"), u.block("cond.else"), u.block("cond.done")
 
 	void := types.IsVoid(t)
@@ -1037,15 +1094,16 @@ func (u *unit) binaryConditional(e *ast.CondExpr, t types.Type) ir.Value {
 	}
 
 	u.fn.cur = elseB
-	ev := u.rvalue(e.Else)
-	if u.at() {
-		if void {
-			u.fn.cur.Br(done.To())
-		} else if ev != nil {
-			u.fn.cur.Br(done.To(u.convert(ev, u.typeOf(e.Else), t)))
-		}
+	if owns {
+		// The condition was nil, and the +1 taken on it is let go here:
+		// the result is the other operand's.
+		u.release(v)
 	}
+	u.condArm(e.Else, t, void, done)
 	u.fn.cur = done
+	if owns {
+		u.owns(res)
+	}
 	return res
 }
 
@@ -1073,7 +1131,11 @@ func (u *unit) assign(e *ast.AssignExpr, t types.Type) ir.Value {
 		if isAggregate(at) {
 			src := u.rvalue(e.Rhs)
 			if p, ok := src.(ir.Ptr); ok {
-				u.copyAggregate(*addr, p, at)
+				if u.isARCRecord(at) {
+					u.copyAssign(*addr, p, at)
+				} else {
+					u.copyAggregate(*addr, p, at)
+				}
 			}
 			return *addr
 		}
@@ -1100,6 +1162,12 @@ func (u *unit) assign(e *ast.AssignExpr, t types.Type) ir.Value {
 			u.replaceStrong(u.refreshByref(e.Lhs, *addr), at, v)
 			return v
 		}
+		if v, ok := u.nonOwningValue(e.Rhs, at); ok {
+			if v != nil {
+				u.storeTo(u.refreshByref(e.Lhs, *addr), v, at)
+			}
+			return v
+		}
 		v := u.rvalue(e.Rhs)
 		if v == nil {
 			return nil
@@ -1119,26 +1187,46 @@ func (u *unit) assign(e *ast.AssignExpr, t types.Type) ir.Value {
 	var res ir.Value
 	if types.IsPointer(at) {
 		elem := types.AsPointer(at).Elem
-		size, _ := u.sizeAlign(elem)
 		n := u.toI64(rhs)
 		p, ok := old.(ir.Ptr)
 		if n == nil || !ok {
 			return nil
 		}
-		scaled := u.fn.cur.I64.Mul(*n, u.fn.cur.I64.Const(int64(size)))
+		scaled := u.fn.cur.I64.Mul(*n, u.elemBytes(elem))
 		if op == token.SUB {
 			res = u.fn.cur.Ptr.Sub(p, scaled)
 		} else {
 			res = u.fn.cur.Ptr.Add(p, scaled)
 		}
 	} else {
-		res = u.arith(op, old, u.convert(rhs, u.typeOf(e.Rhs), at), u.signed(at))
+		// §6.5.16.2: E1 op= E2 is E1 = E1 op E2, so the arithmetic is done
+		// in the operands' common type and the result converted back --
+		// `x *= 1.5` multiplies as double, `b += 1` on a _Bool stores 1.
+		rt := u.typeOf(e.Rhs)
+		ct := u.compoundType(op, at, rt)
+		res = u.arith(op, u.convert(old, at, ct), u.convert(rhs, rt, ct), u.signed(ct))
+		res = u.convert(res, ct, at)
 	}
 	if res == nil {
 		return nil
 	}
 	u.storeTo(*addr, res, at)
 	return res
+}
+
+// compoundType is the type a compound assignment's operation is done in:
+// the usual arithmetic conversions of both sides, or for a shift the
+// promoted left side alone. A vector or anything else not arithmetic keeps
+// the left side's type.
+func (u *unit) compoundType(op token.Kind, at, rt types.Type) types.Type {
+	if rt == nil || types.IsVector(at) || types.IsVector(rt) ||
+		!types.IsArithmetic(types.Unqualify(at)) || !types.IsArithmetic(types.Unqualify(rt)) {
+		return at
+	}
+	if op == token.SHL || op == token.SHR {
+		return u.model.Promote(types.Unqualify(at))
+	}
+	return u.model.Usual(at, rt)
 }
 
 func compoundOp(k token.Kind) token.Kind {
@@ -1182,24 +1270,26 @@ func (u *unit) incDec(x ast.Expr, op token.Kind, t types.Type, postfix bool) ir.
 	var next ir.Value
 	if types.IsPointer(at) {
 		elem := types.AsPointer(at).Elem
-		size, _ := u.sizeAlign(elem)
 		p, ok := old.(ir.Ptr)
 		if !ok {
 			return nil
 		}
-		d := b.I64.Const(int64(size))
+		d := u.elemBytes(elem)
 		if op == token.DEC {
 			next = b.Ptr.Sub(p, d)
 		} else {
 			next = b.Ptr.Add(p, d)
 		}
 	} else {
-		one := u.constOf(1, at)
+		// ++x is x += 1, with the same conversions: a char increments as
+		// an int and wraps on the way back, and a _Bool becomes 1.
 		arith := token.ADD
 		if op == token.DEC {
 			arith = token.SUB
 		}
-		next = u.arith(arith, old, one, u.signed(at))
+		ct := u.compoundType(arith, at, types.Typ(types.Int))
+		next = u.arith(arith, u.convert(old, at, ct), u.constOf(1, ct), u.signed(ct))
+		next = u.convert(next, ct, at)
 	}
 	if next == nil {
 		return nil
@@ -1252,7 +1342,11 @@ func (u *unit) call(e *ast.CallExpr, t types.Type) ir.Value {
 		args = append(args, out)
 	}
 	var wbs []*writeback
+	fixed := -1 // how many of args precede the var-tail
 	for i, a := range e.Args {
+		if i == len(fn.Params) {
+			fixed = len(args)
+		}
 		if i < len(fn.Params) {
 			// §ARC 4.3.2's out-parameter, which is handed a temporary and
 			// copied back after the call. See arc.go.
@@ -1279,13 +1373,15 @@ func (u *unit) call(e *ast.CallExpr, t types.Type) ir.Value {
 			}
 		} else {
 			if types.IsRecord(at) {
-				// A struct in the var-tail. It is legal C, and what the
-				// convention does with it is a classification this has no
-				// way to state: there is no declared parameter to hang
-				// byval on. An *array* is not one of these — §6.3.2.1
-				// decayed it to a pointer before it got here.
-				u.unsupported(a, "a struct or union in a variadic argument")
-				return nil
+				// A struct in the var-tail: see variadicAggregate. An
+				// *array* is not one of these — §6.3.2.1 decayed it to a
+				// pointer before it got here.
+				words, ok := u.variadicAggregate(v, at, a)
+				if !ok {
+					return nil
+				}
+				args = append(args, words...)
+				continue
 			}
 			v = u.defaultPromote(v, at)
 		}
@@ -1322,7 +1418,16 @@ func (u *unit) call(e *ast.CallExpr, t types.Type) ir.Value {
 		return nil
 	}
 	sig := ir.NewSig()
+	if fixed < 0 {
+		fixed = len(args)
+	}
 	for i, a := range args {
+		// A pointer to a variadic function is called like one: the tail
+		// is marked, which on Apple's arm64 puts it on the stack.
+		if fn.Variadic && i == fixed {
+			sig.Variadic()
+			break
+		}
 		r, ok := u.regOfValue(a)
 		if !ok {
 			u.errorf(e, "internal: %T is not a register value in an indirect call", a)
@@ -1407,7 +1512,10 @@ func (u *unit) cast(e *ast.CastExpr, t types.Type) ir.Value {
 // reference the program has also handed to CFRelease, which is a double
 // release and a crash somewhere else entirely.
 func (u *unit) bridgeCast(e *ast.CastExpr, t types.Type) ir.Value {
-	v := u.rvalue(e.X)
+	// The operand at +0, unclaimed: __bridge moves no ownership, and a
+	// call's result under it is left where its callee put it, as clang
+	// leaves it. See rvalueUnclaimed.
+	v := u.rvalueUnclaimed(e.X)
 	if v == nil || types.IsVoid(t) {
 		return nil
 	}

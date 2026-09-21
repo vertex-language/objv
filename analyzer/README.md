@@ -171,14 +171,8 @@ assigning 'NSString*' to 'NSMutableString*': the classes are unrelated;
 
 `analyzer_test.go` covers what `Info` records and what ARC decides.
 
-`corpus_test.go` runs [`tests/check`](../tests/check), where a file's name is
-its contract: `ok-*` must produce no errors, and `bad-*` must produce the ones
-it names — each marked on the line it happens, `// expect: <text>`, which is
-clang's `-verify` in miniature. A test that only counted diagnostics would
-pass when the compiler reported the right number of the wrong things.
-
-The syntax corpus is run through the analyzer too, as a crash test: a tree the
-parser recovered from must not make it misbehave.
+Every program in [`tests`](../tests) is checked on its way to being built and
+compared with clang's build of the same file.
 
 ## Dependencies
 

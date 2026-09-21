@@ -53,6 +53,13 @@ func (u *unit) rvalueOwned(e ast.Expr) (ir.Value, bool) {
 // releaseTemps ends a full expression: everything still registered is
 // something nothing took, and §7.4's end of the statement is where it goes.
 func (u *unit) releaseTemps() {
+	if u.fn != nil && len(u.fn.recTemps) > 0 {
+		recs := u.fn.recTemps
+		u.fn.recTemps = nil
+		for i := len(recs) - 1; i >= 0; i-- {
+			u.destroyRecord(recs[i].addr, recs[i].typ)
+		}
+	}
 	if u.fn == nil || len(u.fn.temps) == 0 {
 		return
 	}
@@ -64,6 +71,180 @@ func (u *unit) releaseTemps() {
 	for i := len(temps) - 1; i >= 0; i-- {
 		u.release(temps[i])
 	}
+}
+
+// tempMark is where the owned temporaries stand now, for a branch that has
+// to let go of what it made before it joins the other: a value created on
+// one path of `a && [b c]` cannot be released after the paths meet.
+func (u *unit) tempMark() int {
+	if u.fn == nil {
+		return 0
+	}
+	return len(u.fn.temps)
+}
+
+// releaseTempsSince releases the temporaries registered since mark.
+func (u *unit) releaseTempsSince(mark int) {
+	if u.fn == nil || len(u.fn.temps) <= mark {
+		return
+	}
+	if mark < 0 {
+		mark = 0
+	}
+	temps := append([]ir.Value(nil), u.fn.temps[mark:]...)
+	u.fn.temps = u.fn.temps[:mark]
+	if !u.at() {
+		return
+	}
+	for i := len(temps) - 1; i >= 0; i-- {
+		u.release(temps[i])
+	}
+}
+
+// claimResult is what ARC does with an object a call hands back at +0 and
+// the program uses: it is retained on the spot -- which, straight after the
+// call, is objc_retainAutoreleasedReturnValue and the return handshake -- and
+// released where the full expression ends, unless something takes it first.
+// clang does exactly this for a result passed on as an argument, a receiver
+// or a setter's value, not only one stored into a variable, and that is what
+// keeps such results out of the autorelease pool.
+func (u *unit) claimResult(e ast.Expr, v ir.Value) ir.Value {
+	if v == nil || !u.arcOn() || !objectValued(u.typeOf(e)) {
+		return v
+	}
+	for _, t := range u.fn.temps {
+		if t == v {
+			return v // already +1: new, alloc, copy, init
+		}
+	}
+	switch x := stripParens(e).(type) {
+	case *ast.MessageExpr, *ast.CallExpr, *ast.BoxedExpr, *ast.ArrayLit, *ast.DictLit:
+	case *ast.MemberExpr:
+		if u.info.Props[x] == nil {
+			return v
+		}
+	default:
+		return v
+	}
+	if u.isWeak(u.typeOf(e)) {
+		return v
+	}
+	r := u.retain(v, u.typeOf(e))
+	u.owns(r)
+	return r
+}
+
+// rvalueUnclaimed is an expression's value at +0, for a consumer that uses it
+// without owning it -- a __bridge cast, an __unsafe_unretained store. The
+// call it may be is not claimed (clang does not claim it either): the result
+// stays wherever its callee left it, which for a +0 return is the pool.
+func (u *unit) rvalueUnclaimed(e ast.Expr) ir.Value {
+	return u.rvalueExpr(stripParens(e))
+}
+
+// autoreleasingValue is the value an __autoreleasing location is given. It
+// has to outlive the statement -- `*error = [NSError …]` is read by a caller
+// after this frame is gone -- so the pool is made to hold it:
+// objc_autorelease for a +1 the expression produced, objc_retainAutorelease
+// for anything borrowed.
+func (u *unit) autoreleasingValue(e ast.Expr, t types.Type) ir.Value {
+	v, owned := u.rvalueOwned(e)
+	if v == nil {
+		return nil
+	}
+	v = u.convert(v, u.typeOf(e), t)
+	p, ok := v.(ir.Ptr)
+	if !ok || !u.arcOn() {
+		return v
+	}
+	name := runtime.RetainAutorelease
+	if owned {
+		name = runtime.Autorelease
+	}
+	sig := ir.NewSig()
+	sig.Param(ir.TypePtr).Ret(ir.TypePtr)
+	res := u.fn.cur.Call(u.extern(name, sig), p)
+	if res.Len() == 0 {
+		return v
+	}
+	return res.Value(0)
+}
+
+// isAutoreleasing and isUnsafe name the two ownerships that neither retain
+// what they are given nor release it when they go.
+func (u *unit) isAutoreleasing(t types.Type) bool {
+	return u.arc && objectValued(t) && types.LifetimeOf(t) == types.LifeAutoreleasing
+}
+
+func (u *unit) isUnsafe(t types.Type) bool {
+	return u.arc && objectValued(t) && types.LifetimeOf(t) == types.LifeUnsafeUnretained
+}
+
+// nonOwningValue is the value an __autoreleasing or __unsafe_unretained
+// location is given, or false for any other location.
+func (u *unit) nonOwningValue(e ast.Expr, t types.Type) (ir.Value, bool) {
+	switch {
+	case !u.arcOn():
+		return nil, false
+	case u.isAutoreleasing(t):
+		return u.autoreleasingValue(e, t), true
+	case u.isUnsafe(t):
+		v := u.rvalueUnclaimed(e)
+		if v == nil {
+			return nil, true
+		}
+		return u.convert(v, u.typeOf(e), t), true
+	}
+	return nil, false
+}
+
+// strongParam is a parameter's type as the body sees it. Under ARC an object
+// parameter with no ownership of its own is __strong (§4.3.3): the callee
+// retains what it was lent on entry and releases it on the way out, so that
+// assigning the parameter -- `o = [Obj new]` -- releases what it held
+// without taking the caller's reference with it.
+func (u *unit) strongParam(t types.Type, v ir.Value) types.Type {
+	if !u.arcOn() || !objectValued(t) || types.LifetimeOf(t) != types.LifeNone {
+		return t
+	}
+	return types.WithLifetime(t, types.LifeStrong)
+}
+
+// paramValue is what a parameter's slot starts with: the argument, retained
+// when the slot is a strong one.
+func (u *unit) paramValue(t types.Type, v ir.Value) ir.Value {
+	if u.isStrong(t) {
+		return u.retain(v, t)
+	}
+	return v
+}
+
+// heldForStatement evaluates the object a statement works on for its whole
+// length -- the collection of a for-in, the lock of @synchronized -- and
+// under ARC keeps it alive until the statement is left by any path: it is
+// held in a strong local of the innermost ARC scope, which the caller opens
+// around the statement. A temporary, `for (x in [a items])`, would otherwise
+// be released where the first statement of the body ends.
+func (u *unit) heldForStatement(e ast.Expr) (ir.Ptr, bool) {
+	t := u.typeOf(e)
+	if !u.arcOn() || !objectValued(t) {
+		p, ok := u.rvalue(e).(ir.Ptr)
+		u.releaseTemps()
+		return p, ok
+	}
+	v, owned := u.rvalueOwned(e)
+	p, ok := v.(ir.Ptr)
+	if !ok {
+		return ir.Ptr{}, false
+	}
+	if !owned {
+		p, _ = u.retain(p, t).(ir.Ptr)
+	}
+	u.releaseTemps()
+	slot := u.slot(t, "")
+	u.storeTo(slot, p, t)
+	u.noteStrongLocal(slot, t)
+	return p, true
 }
 
 // ---- the runtime's four calls ----
@@ -81,6 +262,15 @@ func (u *unit) retain(v ir.Value, t types.Type) ir.Value {
 	name := runtime.Retain
 	if t != nil && types.IsBlock(t) {
 		name = runtime.RetainBlock
+	} else if call := u.justCalled(p); call != nil {
+		// The result of the call just made, at +0: the other half of the
+		// return handshake. The marker after the call tells the callee's
+		// objc_autoreleaseReturnValue that this retain is coming, and the
+		// object skips the autorelease pool altogether -- so it is freed
+		// when this frame lets go of it, not when some pool drains, and a
+		// call with no pool in place leaks nothing.
+		call.Meta(ir.Attached(ir.AttachObjCReturnMarker))
+		name = runtime.RetainAutoreleasedReturnValue
 	}
 	sig := ir.NewSig()
 	sig.Param(ir.TypePtr).Ret(ir.TypePtr)
@@ -89,6 +279,35 @@ func (u *unit) retain(v ir.Value, t types.Type) ir.Value {
 		return v
 	}
 	return res.Value(0)
+}
+
+// justCalled is the call instruction whose result p is, when that call is the
+// last thing emitted in the current block -- nothing may run between the
+// callee's return and the retain that claims its result.
+func (u *unit) justCalled(p ir.Ptr) *ir.Inst {
+	d := p.Def()
+	if d == nil || u.fn == nil || u.fn.cur == nil {
+		return nil
+	}
+	// Inside a region that unwinds, the call is an invoke and its result
+	// is the first thing its continuation block has: a parameter, with
+	// nothing emitted before the retain.
+	if inv, ok := u.fn.invokes[u.fn.cur]; ok && u.fn.cur.Last() == nil {
+		for _, bp := range u.fn.cur.Params() {
+			if bp == d {
+				return inv
+			}
+		}
+	}
+	in := d.Inst()
+	if in == nil || in != u.fn.cur.Last() {
+		return nil
+	}
+	switch in.Op().Verb {
+	case ir.VCall, ir.VCallInd:
+		return in
+	}
+	return nil
 }
 
 func (u *unit) release(v ir.Value) {
@@ -171,7 +390,53 @@ func (u *unit) releaseStrongLocal(addr ir.Ptr, t types.Type) {
 	if !u.at() {
 		return
 	}
+	if u.isStrongArray(t) {
+		u.releaseStrongArray(addr, t)
+		return
+	}
+	if u.isARCRecord(t) {
+		u.destroyRecord(addr, t)
+		return
+	}
 	u.release(u.loadFrom(addr, t))
+}
+
+// isStrongArray reports whether t is a fixed array, of any rank, whose
+// elements are __strong objects.
+func (u *unit) isStrongArray(t types.Type) bool {
+	a := types.AsArray(t)
+	if a == nil || !u.arc || a.Form != types.FixedArray {
+		return false
+	}
+	if types.IsArray(a.Elem) {
+		return u.isStrongArray(a.Elem)
+	}
+	return u.isStrong(a.Elem)
+}
+
+// releaseStrongArray releases every element of a strong array, last first,
+// with a loop: the count is the array's size in pointers, whatever its rank.
+func (u *unit) releaseStrongArray(addr ir.Ptr, t types.Type) {
+	size, _ := u.sizeAlign(t)
+	n := int64(size) / u.abi.PtrBytes
+	if n == 0 {
+		return
+	}
+	i := u.fn.entry.Ptr.Alloc(8, 8)
+	b := u.fn.cur
+	b.I64.Store(b.I64.Const(n), i)
+	cond, body, done := u.block("strong_array.cond"), u.block("strong_array.body"), u.block("strong_array.done")
+	b.Br(cond.To())
+	u.fn.cur = cond
+	left := cond.I64.Load(i)
+	cond.BrIf(cond.I64.Eq(left, cond.I64.Const(0)), done.To(), body.To())
+	u.fn.cur = body
+	k := body.I64.Sub(body.I64.Load(i), body.I64.Const(1))
+	body.I64.Store(k, i)
+	elem := body.Ptr.Load(body.Ptr.Add(addr, body.I64.Mul(k, body.I64.Const(u.abi.PtrBytes))))
+	u.release(elem)
+	u.fn.cur.Br(cond.To())
+	u.fn.cur = done
 }
 
 // returnValue applies §the caller's convention to a returned object.
@@ -190,20 +455,26 @@ func (u *unit) returnObject(v ir.Value, owned bool) ir.Value {
 		}
 		return v
 	}
-	if owned {
-		return u.autoreleaseReturn(v)
+	// +1 through the frame's cleanups -- a borrowed value is retained, since
+	// whatever holds it may be released before the caller looks -- and
+	// autoreleased as the very last thing, by tail call, which is what lets
+	// the caller's objc_retainAutoreleasedReturnValue claim it: the runtime
+	// reads the marker at *its* caller's return address, and after a tail
+	// call that is this function's caller. See returnValue.
+	if !owned {
+		v = u.retain(v, u.fn.ret)
 	}
-	// A borrowed value: whatever holds it may be released before the caller
-	// looks, and the frame's own cleanups run between here and there.
-	return u.autoreleaseReturn(u.retain(v, u.fn.ret))
+	u.fn.autoreleaseOnReturn = true
+	return v
 }
 
 // strongLocal is a variable whose scope ending lets go of what it holds, and
 // weak says how: a __strong one is released, a __weak one unregistered.
 type strongLocal struct {
-	addr ir.Ptr
-	typ  types.Type
-	weak bool
+	addr  ir.Ptr
+	typ   types.Type
+	weak  bool
+	byref *byref // a __block variable's structure; see endByref
 }
 
 // pushARCScope and popARCScope bracket a C block, which is where a __strong
@@ -431,6 +702,26 @@ func (u *unit) loadWeak(addr ir.Ptr) ir.Value {
 	return res.Value(0)
 }
 
+// copyWeak makes dst a new weak reference to whatever src refers to; dst is
+// uninitialized before.
+func (u *unit) copyWeak(dst, src ir.Ptr) {
+	sig := ir.NewSig()
+	sig.Param(ir.TypePtr).Param(ir.TypePtr)
+	u.fn.cur.Call(u.extern(runtime.CopyWeak, sig), dst, src)
+}
+
+// loadWeakRetained reads a weak reference at +1: the object, retained, or nil
+// if it has gone.
+func (u *unit) loadWeakRetained(addr ir.Ptr) ir.Value {
+	sig := ir.NewSig()
+	sig.Param(ir.TypePtr).Ret(ir.TypePtr)
+	res := u.fn.cur.Call(u.extern(runtime.LoadWeakRetained, sig), addr)
+	if res.Len() == 0 {
+		return nil
+	}
+	return res.Value(0)
+}
+
 // destroyWeak unregisters a weak reference whose storage is going away.
 func (u *unit) destroyWeak(addr ir.Ptr) {
 	sig := ir.NewSig()
@@ -454,6 +745,10 @@ func (u *unit) endLocal(l strongLocal) {
 	}
 	if l.weak {
 		u.destroyWeak(l.addr)
+		return
+	}
+	if l.byref != nil {
+		u.endByref(l.byref)
 		return
 	}
 	u.releaseStrongLocal(l.addr, l.typ)

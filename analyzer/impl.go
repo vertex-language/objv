@@ -4,6 +4,7 @@ import (
 	"github.com/vertex-language/objv/ast"
 	"github.com/vertex-language/objv/token"
 	"github.com/vertex-language/objv/types"
+	"sort"
 )
 
 // @implementation: what a class actually provides, checked against what its
@@ -91,6 +92,7 @@ func (c *checker) implement(at ast.Node, k *types.Class, members []ast.Decl, own
 		if whole {
 			c.autoSynthesize(k, members, defined)
 		}
+		c.orderSynthesizedIvars(k)
 
 		for _, m := range members {
 			switch m := m.(type) {
@@ -200,6 +202,34 @@ func (c *checker) autoSynthesize(k *types.Class, members []ast.Decl, defined map
 		}
 		c.synthesize(k, p, "_"+p.Name, nil, defined)
 	}
+}
+
+// orderSynthesizedIvars puts a class's instance variables in the order clang
+// lays them out: every declared one first, in the order written -- the
+// interface, then extensions, then the implementation -- and after them the
+// ones properties synthesized, smallest first. clang sorts those by size to
+// save padding (a stable sort, so equal sizes keep their order), and since
+// the order is the layout, a class whose subclass or superclass clang
+// compiled has to match it field for field.
+func (c *checker) orderSynthesizedIvars(k *types.Class) {
+	var declared, synth []types.Ivar
+	for _, iv := range k.Ivars {
+		if iv.Synthesized {
+			synth = append(synth, iv)
+		} else {
+			declared = append(declared, iv)
+		}
+	}
+	if len(synth) < 2 {
+		k.Ivars = append(declared, synth...)
+		return
+	}
+	size := func(iv types.Ivar) int64 {
+		n, _ := c.model.Sizeof(iv.Type)
+		return n
+	}
+	sort.SliceStable(synth, func(i, j int) bool { return size(synth[i]) < size(synth[j]) })
+	k.Ivars = append(declared, synth...)
 }
 
 // synthesize gives a property its instance variable and its accessors.

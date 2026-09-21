@@ -137,8 +137,8 @@ int f(K *k) { [k b:1]; return [k a] + [k a2]; }
 		t.Errorf("objc_msgSend imported %d times, want 1", n)
 	}
 	mustContain(t, out,
-		"type @msgsig_ptr_ptr_ri32 func (ptr, ptr) i32",
-		"type @msgsig_ptr_ptr_i32 func (ptr, ptr, i32)")
+		"type @msgsig_ptr_ptr_ri32 func(ptr, ptr) i32",
+		"type @msgsig_ptr_ptr_i32 func(ptr, ptr, i32)")
 	// Two methods of one shape share one type declaration.
 	if n := strings.Count(out, "type @msgsig_ptr_ptr_ri32"); n != 1 {
 		t.Errorf("the same signature was declared %d times", n)

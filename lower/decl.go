@@ -47,6 +47,23 @@ type fnState struct {
 	// its way in and restores it on its way out. See vla.go.
 	vlaScopes []vlaScope
 
+	// autoreleaseOnReturn says the value the return being lowered hands
+	// back is +1 and goes out through objc_autoreleaseReturnValue, as a
+	// tail call after every cleanup. See returnObject.
+	autoreleaseOnReturn bool
+
+	// recTemps are struct temporaries that own objects -- call results --
+	// destroyed where the full expression ends. See arcstruct.go.
+	recTemps []recTemp
+
+	// invokes is the invoke that ends in each call.cont block, whose
+	// parameters are that call's results. See justCalled.
+	invokes map[*ir.Block]*ir.Inst
+
+	// vlaSize is the byte size of each variably sized array type a
+	// declaration in this function has evaluated. See vla.go.
+	vlaSize map[*types.Array]ir.I64
+
 	// pools are the autorelease pool tokens of the enclosing
 	// @autoreleasepool blocks, innermost last.
 	pools []ir.Ptr
@@ -62,10 +79,6 @@ type fnState struct {
 	// retSlot is where a return crossing a @finally parks its value while
 	// the block runs. One per function, made on first need.
 	retSlot ir.Ptr
-
-	// byrefs are the __block structures this function declared, which are
-	// handed back to the runtime on every path out. See byref.go.
-	byrefs []ir.Ptr
 
 	// temps are the objects the full expression being lowered produced at
 	// +1 and nothing has claimed. See arc.go.
@@ -89,11 +102,15 @@ type fnState struct {
 	nblocks int
 }
 
-// A jumpTarget is where a break or a continue goes, and how deep in the
-// @try stack the statement that owns it stands.
+// A jumpTarget is where a break or a continue goes, and how deep the
+// statement that owns it stands: in the @try stack, in the C scopes that
+// hold __strong locals, and in the @autoreleasepool blocks. A jump leaves
+// everything opened deeper than that, and leaving has to release and pop.
 type jumpTarget struct {
-	blk   *ir.Block
-	tries int
+	blk    *ir.Block
+	tries  int
+	scopes int
+	pools  int
 }
 
 // block makes a fresh block with a readable label.
@@ -336,7 +353,7 @@ func (u *unit) declareGlobalVar(name string, t types.Type, sp declSpec, at ast.N
 		g.Export()
 	}
 	_, align := u.sizeAlign(t)
-	g.Align(align)
+	g.Align(u.declAlign(at, align))
 	u.top.names[name] = &storage{kind: stGlobal, typ: t, sym: g}
 }
 
@@ -807,6 +824,10 @@ func (u *unit) buildBody(fn *ir.Func, ft *types.Func, names []*ast.Ident,
 	u.fn.entry, u.fn.cur = entry, body
 	defer func() { entry.Br(body.To()) }()
 
+	// The parameters' own ARC scope, outside the body's: a strong parameter
+	// is released when the function ends, by any path. See strongParam.
+	u.pushARCScope()
+
 	// Each parameter is copied into a slot, because a parameter is an
 	// ordinary local: it may be assigned, addressed, or captured by a
 	// block.
@@ -818,14 +839,27 @@ func (u *unit) buildBody(fn *ir.Func, ft *types.Func, names []*ast.Ident,
 		if isAggregate(p.Type) {
 			addr, _ := values[i].(ir.Ptr)
 			u.bind(name, &storage{kind: stLocal, typ: p.Type, addr: addr})
+			// The callee owns a struct argument that owns objects, and
+			// destroys it on the way out. See arcstruct.go.
+			if u.isARCRecord(p.Type) {
+				u.noteStrongLocal(addr, p.Type)
+			}
 			continue
 		}
 		// The slot is named apart from the parameter register: they are two
 		// registers, and one name printed twice is not a module the text
 		// format can read back.
-		slot := u.slot(p.Type, name+"_addr")
-		u.storeTo(slot, values[i], p.Type)
-		u.bind(name, &storage{kind: stLocal, typ: p.Type, addr: slot})
+		pt := p.Type
+		isSelf := self != nil && i == 0
+		if !isSelf {
+			pt = u.strongParam(pt, values[i])
+		}
+		slot := u.slot(pt, name+"_addr")
+		u.storeTo(slot, u.paramValue(pt, values[i]), pt)
+		u.bind(name, &storage{kind: stLocal, typ: pt, addr: slot})
+		if u.isStrong(pt) {
+			u.noteStrongLocal(slot, pt)
+		}
 
 		// self is kept on the function state as well as bound by name:
 		// every instance variable access and every implicit send starts
@@ -845,6 +879,7 @@ func (u *unit) buildBody(fn *ir.Func, ft *types.Func, names []*ast.Ident,
 	}
 
 	u.stmt(stmts)
+	u.popARCScope()
 
 	// A body that fell off the end still needs a terminator. A void
 	// function returns; anything else has already been reported by the
@@ -855,7 +890,6 @@ func (u *unit) buildBody(fn *ir.Func, ft *types.Func, names []*ast.Ident,
 			if fam == runtime.FamilyNone && self != nil && u.deallocating {
 				u.arcSuperDealloc(self)
 			}
-			u.releaseByrefs()
 			u.fn.cur.Return()
 		} else {
 			u.fn.cur.Trap()
@@ -886,13 +920,58 @@ func (u *unit) bindIvars(k *types.Class) {
 // or assigned inside a loop needs a place to be, and deciding which locals
 // could have avoided one is the optimizer's job.
 func (u *unit) slot(t types.Type, name string) ir.Ptr {
+	return u.slotAligned(t, name, 0)
+}
+
+// declAlign is an object's alignment: its type's, or more where the
+// declaration asked for more with _Alignas or aligned.
+func (u *unit) declAlign(d ast.Node, align uint64) uint64 {
+	if d == nil {
+		return align
+	}
+	if a := uint64(u.info.Aligns[d]); a > align {
+		return a
+	}
+	return align
+}
+
+// slotAligned is slot for a declaration that may ask for more alignment
+// than its type has.
+func (u *unit) slotAligned(t types.Type, name string, min uint64) ir.Ptr {
 	size, align := u.sizeAlign(t)
+	if min > align {
+		align = min
+	}
 	if size == 0 {
 		size = 1
+	}
+	if align > frameAlign {
+		return u.overAligned(size, align, name)
 	}
 	p := u.fn.entry.Ptr.Alloc(size, align)
 	if name != "" {
 		u.fn.entry.Name(p, name)
+	}
+	return p
+}
+
+// frameAlign is the most a stack slot's alignment can ask of the frame: the
+// AAPCS64 stack is 16-byte aligned and the backend does not realign it.
+const frameAlign = 16
+
+// overAligned is a slot aligned past what the frame guarantees, as
+// `_Alignas(64) char buf[n]` asks for: room for the object and the worst
+// case of padding in front of it, and the address rounded up inside it.
+// clang realigns the whole frame instead; the object ends up where C says
+// either way.
+func (u *unit) overAligned(size, align uint64, name string) ir.Ptr {
+	e := u.fn.entry
+	raw := e.Ptr.Alloc(size+align-frameAlign, frameAlign)
+	addr := e.Ptr.Diff(raw, e.Ptr.Const())
+	up := e.I64.And(e.I64.Add(addr, e.I64.Const(int64(align-1))), e.I64.Const(-int64(align)))
+	p := e.Ptr.Add(raw, e.I64.Sub(up, addr))
+	if name != "" {
+		e.Name(p, name)
 	}
 	return p
 }

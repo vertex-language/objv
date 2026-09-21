@@ -19,6 +19,15 @@ func (u *unit) stmt(s ast.Stmt) {
 	if s == nil {
 		return
 	}
+	// A statement that ended its path -- @throw, return, a call to a
+	// noreturn function -- leaves nothing for the next one to release: the
+	// temporaries it registered are values of a block nothing follows.
+	defer func() {
+		if u.fn != nil && !u.at() {
+			u.fn.temps = nil
+			u.fn.recTemps = nil
+		}
+	}()
 	switch s := s.(type) {
 	case *ast.CompoundStmt:
 		u.push()
@@ -182,6 +191,34 @@ func (u *unit) localDecl(d ast.Decl) {
 			u.initWeak(slot, v)
 			continue
 		}
+		if u.isARCRecord(t) && sp.storage != token.STATIC && sp.storage != token.EXTERN && !sp.block {
+			// A struct that owns objects: its members start nil, and it is
+			// destroyed where its scope ends. See arcstruct.go.
+			slot := u.slot(t, name)
+			u.bind(name, &storage{kind: stLocal, typ: t, addr: slot})
+			size, _ := u.sizeAlign(t)
+			b := u.fn.cur
+			b.MemSet(slot, b.I32.Const(0), b.I64.Const(int64(size)))
+			if it.Init != nil {
+				u.initLocal(slot, t, it.Init)
+			}
+			u.noteStrongLocal(slot, t)
+			continue
+		}
+		if u.isStrongArray(t) && sp.storage != token.STATIC && sp.storage != token.EXTERN && !sp.block {
+			// An array of __strong objects: every element starts nil, and
+			// every element is released where the array's scope ends.
+			slot := u.slot(t, name)
+			u.bind(name, &storage{kind: stLocal, typ: t, addr: slot})
+			size, _ := u.sizeAlign(t)
+			b := u.fn.cur
+			b.MemSet(slot, b.I32.Const(0), b.I64.Const(int64(size)))
+			u.noteStrongLocal(slot, t)
+			if it.Init != nil {
+				u.initLocal(slot, t, it.Init)
+			}
+			continue
+		}
 		if u.isStrong(t) && sp.storage != token.STATIC && sp.storage != token.EXTERN && !sp.block {
 			// §5.6: a __strong local owns what it holds, from here to the
 			// end of its scope.
@@ -209,7 +246,14 @@ func (u *unit) localDecl(d ast.Decl) {
 		if u.declareVLA(name, t, it) {
 			continue
 		}
-		slot := u.slot(t, name)
+		if isVariablyModified(t) {
+			// `double (*row)[n]`: the object is a pointer, but the type it
+			// points at is sized here, where n is read.
+			if !u.evalVLATypes(it.Decl, t) {
+				u.unsupported(it, "this variably modified declarator")
+			}
+		}
+		slot := u.slotAligned(t, name, u.declAlign(it, 0))
 		u.bind(name, &storage{kind: stLocal, typ: t, addr: slot})
 		if it.Init == nil {
 			continue
@@ -232,7 +276,7 @@ func (u *unit) staticLocal(name string, t types.Type, it *ast.InitDeclarator) ir
 	}
 	g := u.mod.Global(u.sym(u.uniq("static."+name)), ir.RW, f).Internal()
 	_, align := u.sizeAlign(t)
-	g.Align(align)
+	g.Align(u.declAlign(it, align))
 	if it.Init != nil {
 		init, ok := u.constInit(it.Init, t)
 		if !ok {
@@ -284,7 +328,14 @@ func (u *unit) returnStmt(s *ast.ReturnStmt) {
 			u.errorf(s, "internal: an aggregate result is not an address")
 			return
 		}
-		u.copyAggregate(u.fn.sret, src, u.fn.ret)
+		// A struct that owns objects is returned as a copy the caller
+		// owns; the frame's own then goes with the frame.
+		if u.isARCRecord(u.fn.ret) {
+			u.copyConstruct(u.fn.sret, src, u.fn.ret)
+		} else {
+			u.copyAggregate(u.fn.sret, src, u.fn.ret)
+		}
+		u.releaseTemps()
 		u.finishReturn(nil)
 		return
 	}
@@ -293,8 +344,17 @@ func (u *unit) returnStmt(s *ast.ReturnStmt) {
 	u.finishReturn(v)
 }
 
+// condition lowers a statement's controlling expression, which is a full
+// expression of its own (§6.8p4): what it made and nothing took is released
+// once its truth is known, on the path that computed it.
+func (u *unit) condition(e ast.Expr) *ir.I1 {
+	c := u.truth(e)
+	u.releaseTemps()
+	return c
+}
+
 func (u *unit) ifStmt(s *ast.IfStmt) {
-	c := u.truth(s.Cond)
+	c := u.condition(s.Cond)
 	if c == nil {
 		return
 	}
@@ -326,7 +386,7 @@ func (u *unit) whileStmt(s *ast.WhileStmt) {
 	u.fn.cur.Br(cond.To())
 
 	u.fn.cur = cond
-	c := u.truth(s.Cond)
+	c := u.condition(s.Cond)
 	if c == nil {
 		return
 	}
@@ -345,7 +405,7 @@ func (u *unit) doStmt(s *ast.DoStmt) {
 	u.loop(done, cond, s.Body)
 
 	u.fn.cur = cond
-	c := u.truth(s.Cond)
+	c := u.condition(s.Cond)
 	if c == nil {
 		return
 	}
@@ -370,7 +430,7 @@ func (u *unit) forStmt(s *ast.ForStmt) {
 
 	u.fn.cur = cond
 	if s.Cond != nil {
-		c := u.truth(s.Cond)
+		c := u.condition(s.Cond)
 		if c == nil {
 			return
 		}
@@ -385,6 +445,7 @@ func (u *unit) forStmt(s *ast.ForStmt) {
 	u.fn.cur = post
 	if s.Post != nil {
 		u.rvalue(s.Post)
+		u.releaseTemps()
 	}
 	if u.at() {
 		u.fn.cur.Br(cond.To())
@@ -414,6 +475,7 @@ func (u *unit) switchStmt(s *ast.SwitchStmt) {
 	if v == nil {
 		return
 	}
+	u.releaseTemps() // the controlling expression is a full expression
 	sel, ok := v.(ir.I32)
 	if !ok {
 		w := u.convert(v, u.typeOf(s.Cond), types.Typ(types.Int))

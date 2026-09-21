@@ -54,6 +54,7 @@ func (c *checker) checkDecl(d ast.Decl, external bool) {
 func (c *checker) checkGenDecl(d *ast.GenDecl, external bool) {
 	sp := types.BuildSpecs(c.unit, d.Specs, c)
 	c.checkStorage(d, sp, external)
+	align := c.explicitAlign(sp)
 
 	if len(d.List) == 0 {
 		// struct S {…};  enum E {…}; — the specifier was the point. A bare
@@ -75,6 +76,9 @@ func (c *checker) checkGenDecl(d *ast.GenDecl, external bool) {
 		t = c.completeArray(t, id.Init)
 		t = c.ownership(t, sp.Storage == token.EXTERN || external)
 		c.info.Types[id] = t
+		if align > 0 {
+			c.info.Aligns[id] = align
+		}
 		if name == nil {
 			c.expr(id.Init)
 			continue
@@ -250,15 +254,43 @@ func (c *checker) checkStorage(d ast.Node, sp types.Spec, external bool) {
 	if external && (sp.Storage == token.AUTO || sp.Storage == token.REGISTER) {
 		c.report(d, "file-scope declaration cannot be auto or register")
 	}
+}
+
+// explicitAlign is the alignment a declaration's specifiers ask for: the
+// largest of its _Alignas(n), _Alignas(type) and aligned attributes, or 0.
+// _Alignas(0) asks for nothing (§6.7.5p6).
+func (c *checker) explicitAlign(sp types.Spec) int64 {
+	var align int64
 	for _, a := range sp.Aligns {
-		if a.X != nil {
-			if v, ok := c.requireConst(a.X, "_Alignas argument"); ok {
-				if v != 0 && (v&(v-1)) != 0 {
-					c.report(a, "_Alignas argument must be a power of two")
-				}
+		var v int64
+		switch {
+		case a.X != nil:
+			n, ok := c.requireConst(a.X, "_Alignas argument")
+			if !ok {
+				continue
+			}
+			if n != 0 && (n&(n-1)) != 0 {
+				c.report(a, "_Alignas argument must be a power of two")
+				continue
+			}
+			v = n
+		case a.Type != nil:
+			if t := c.typeName(a.Type); t != nil {
+				v, _ = c.model.Alignof(t)
+			}
+		}
+		if v > align {
+			align = v
+		}
+	}
+	for _, a := range sp.Attrs {
+		if c.attrName(a) == "aligned" && a.Args != nil && len(a.Args.List) > 0 {
+			if v, ok := c.attrInt(a); ok && v > align {
+				align = v
 			}
 		}
 	}
+	return align
 }
 
 func (c *checker) hasVLA(t types.Type) bool {
@@ -392,6 +424,7 @@ func (c *checker) recordType(st *ast.StructType) types.Type {
 			continue
 		}
 		sp := types.BuildSpecs(c.unit, fd.Specs, c)
+		falign := c.explicitAlign(sp)
 		if len(fd.List) == 0 {
 			if anonymousMember(fd.Specs, sp.Type) {
 				rec.Fields = append(rec.Fields, types.Field{Type: sp.Type})
@@ -402,7 +435,10 @@ func (c *checker) recordType(st *ast.StructType) types.Type {
 		}
 		for j, d := range fd.List {
 			t, id := types.BuildDeclarator(c.unit, sp.Type, d.Decl, false, c)
-			fld := types.Field{Type: t}
+			// Under ARC an object member with no ownership of its own is
+			// __strong, as a variable is (§4.1): the struct owns it.
+			t = c.ownership(t, false)
+			fld := types.Field{Type: t, Align: falign}
 			if id != nil {
 				fld.Name = c.name(id)
 			}

@@ -128,11 +128,16 @@ func (u *unit) synthesizeGetter(k *types.Class, p *types.Property) {
 		// A weak getter reads through the runtime, which hands back a value
 		// it has autoreleased — the object may go away between the read and
 		// the caller's use, and only the runtime knows.
-		v := u.loadWeak(b.Ptr.Add(self, off))
-		if v == nil {
+		// Read at +1 and handed back through the return handshake, as
+		// clang's weak getter does: the caller that retains the result
+		// claims this reference and nothing reaches a pool.
+		v, ok := u.loadWeakRetained(b.Ptr.Add(self, off)).(ir.Ptr)
+		if !ok {
 			return
 		}
-		b.Return(v)
+		sig := ir.NewSig()
+		sig.Param(ir.TypePtr).Ret(ir.TypePtr)
+		b.TailCall(u.extern(runtime.AutoreleaseReturnValue, sig), v)
 		return
 	}
 	if u.atomicObject(p) {
@@ -232,4 +237,10 @@ func (u *unit) ownsValue(p *types.Property) (copies, owns bool) {
 	return false, false
 }
 
-func objectValued(t types.Type) bool { return types.IsObjectPointer(t) || types.IsBlock(t) }
+// objectValued reports whether ARC manages a value of t: an object pointer
+// or a block. Not Class: clang never retains or releases a class object --
+// a class need not implement retain at all, and a root class of the
+// program's own does not, so a retain sent to one aborts in forwarding.
+func objectValued(t types.Type) bool {
+	return (types.IsObjectPointer(t) && !types.IsClassType(t)) || types.IsBlock(t)
+}

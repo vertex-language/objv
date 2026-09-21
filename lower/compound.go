@@ -52,6 +52,17 @@ func (u *unit) compoundAddr(e *ast.CompoundLit) (ir.Ptr, types.Type, bool) {
 		return ir.Ptr{}, nil, false
 	}
 	slot := u.slot(t, "compound")
+	if u.isARCRecord(t) {
+		size, _ := u.sizeAlign(t)
+		b := u.fn.cur
+		b.MemSet(slot, b.I32.Const(0), b.I64.Const(int64(size)))
+		u.initLocal(slot, t, e.Init)
+		// A temporary of the full expression, as clang treats one that
+		// owns objects: moved into what takes it, destroyed where the
+		// expression ends otherwise.
+		u.noteRecordTemp(slot, t)
+		return slot, t, true
+	}
 	u.initLocal(slot, t, e.Init)
 	return slot, t, true
 }

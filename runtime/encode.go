@@ -45,6 +45,17 @@ func (a ABI) Encode(t types.Type, m types.Model) string {
 // `id<NSCopying>` is `@"<NSCopying>"`.
 func (a ABI) EncodeExtended(t types.Type, m types.Model) string {
 	var b strings.Builder
+	e := &encoder{abi: a, model: m, extended: true, fieldNames: true}
+	e.encode(&b, t, false)
+	return b.String()
+}
+
+// EncodeProperty is the encoding a property's T attribute carries: an
+// object's class is kept, as in EncodeExtended, but a struct's fields are
+// not named -- `T{?=cd}` where the ivar behind it says `{?="tag"c"weight"d}`.
+// That is clang's output, and the runtime compares the two only as strings.
+func (a ABI) EncodeProperty(t types.Type, m types.Model) string {
+	var b strings.Builder
 	e := &encoder{abi: a, model: m, extended: true}
 	e.encode(&b, t, false)
 	return b.String()
@@ -135,6 +146,10 @@ type encoder struct {
 	abi      ABI
 	model    types.Model
 	extended bool
+
+	// fieldNames writes each struct field's name before its encoding,
+	// which the ivar form does where the struct is stored by value.
+	fieldNames bool
 
 	// inProgress is the structs and unions whose bodies are being written.
 	// A pointer to one of them is encoded as the tag alone: `struct Node {
@@ -241,6 +256,11 @@ func (e *encoder) encodePointer(b *strings.Builder, p *types.Pointer) {
 		b.WriteByte('r')
 	}
 	b.WriteByte('^')
+	// What a pointer points at is written plainly even in the extended
+	// form: clang names a struct's fields and an object field's class only
+	// where the value itself is stored, and `^{?=c@}` behind a pointer.
+	defer func(was bool) { e.extended = was }(e.extended)
+	e.extended = false
 	// A pointer to a struct whose body is already being written stops at the
 	// tag; anything else expands.
 	if r, ok := elem.(*types.Record); ok {
@@ -295,9 +315,21 @@ func (e *encoder) encodeRecord(b *strings.Builder, r *types.Record, withBody boo
 	b.WriteString(name)
 
 	if withBody && r.Complete {
+		// Without field names -- a property's encoding -- a struct's body
+		// is the plain form throughout, its object fields bare '@'.
+		if !e.fieldNames {
+			defer func(was bool) { e.extended = was }(e.extended)
+			e.extended = false
+		}
 		b.WriteByte('=')
 		e.inProgress = append(e.inProgress, r)
 		for _, f := range r.Fields {
+			// The extended form names each field: {?="tag"c"weight"d}.
+			if e.extended && e.fieldNames {
+				b.WriteByte('"')
+				b.WriteString(f.Name)
+				b.WriteByte('"')
+			}
 			if f.BitField {
 				b.WriteByte('b')
 				b.WriteString(strconv.FormatInt(f.Width, 10))

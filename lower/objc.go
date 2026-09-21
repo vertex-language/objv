@@ -30,6 +30,22 @@ func (u *unit) message(e *ast.MessageExpr, t types.Type) ir.Value {
 		return nil
 	}
 
+	// §ARC 3.2.4: an init method consumes its receiver. A receiver this
+	// expression made -- [Box alloc] -- is handed over; one it only
+	// borrowed -- a variable, `[o init]` -- is retained first, so the
+	// method consumes that and the variable keeps what it owns. Without it
+	// the storing of init's result into o releases o's object a second
+	// time. super is the method's own self, which the method consumes, and
+	// so is `self` in an initializer: `self = [self initWith…]` hands on
+	// the +1 the method was called with, and assigning self releases
+	// nothing (see consumingSelf).
+	if u.arcOn() && !super && runtime.FamilyOf(sel).ConsumesSelf() && !u.consumingSelf(e.Recv) {
+		if !u.takeOwned(*recv) {
+			r := u.retain(*recv, u.typeOf(e.Recv))
+			recv = &r
+		}
+	}
+
 	var params []types.Param
 	if m != nil {
 		params = m.Params
@@ -58,12 +74,16 @@ func (u *unit) message(e *ast.MessageExpr, t types.Type) ir.Value {
 				val = u.convert(val, at, params[i].Type)
 			} else {
 				// Past the declared parameters is the var-tail, where
-				// §6.5.2.2's promotions are all the callee can expect --
-				// and where an aggregate has no declaration to hang byval
-				// on, so there is nothing to say about how it travels.
+				// §6.5.2.2's promotions are all the callee can expect, and
+				// an aggregate travels as variadicAggregate says.
 				if types.IsRecord(at) {
-					u.unsupported(v, "a struct or union in a variadic argument")
-					return nil
+					words, ok := u.variadicAggregate(val, at, v)
+					if !ok {
+						return nil
+					}
+					args = append(args, words...)
+					i++
+					continue
 				}
 				val = u.defaultPromote(val, at)
 			}
@@ -86,9 +106,6 @@ func (u *unit) message(e *ast.MessageExpr, t types.Type) ir.Value {
 	// and not two. runtime.FamilyOf is the rule; arc.go is the register.
 	if u.arcOn() {
 		fam := runtime.FamilyOf(sel)
-		if fam.ConsumesSelf() {
-			u.takeOwned(*recv)
-		}
 		if fam.ReturnsRetained() && objectValued(ret) {
 			u.owns(v)
 		}
@@ -131,6 +148,16 @@ func (u *unit) sendWith(recv ir.Value, super bool, sel string, args []ir.Value,
 	if isIndirectResult(ret) {
 		out = u.aggResult(ret)
 		all = append([]ir.Value{out}, all...)
+		// A message to nil returns zero, and for a result the runtime
+		// hands back in registers it clears them itself. One returned in
+		// memory -- over 16 bytes on AArch64 -- it never touches, so the
+		// memory is cleared first: a live receiver overwrites all of it,
+		// and a nil one leaves the zeros clang's nil check would have
+		// written. super is never nil.
+		if size, _ := u.sizeAlign(ret); size > 16 && !super {
+			b := u.fn.cur
+			b.MemSet(out, b.I32.Const(0), b.I64.Const(int64(size)))
+		}
 	}
 	for j, a := range args {
 		if j < len(params) && isAggregate(params[j].Type) {
@@ -657,8 +684,9 @@ func (u *unit) synchronized(s *ast.SyncStmt) {
 	if !u.at() {
 		return
 	}
-	obj := u.rvalue(s.X)
-	p, ok := obj.(ir.Ptr)
+	u.pushARCScope()
+	defer u.popARCScope()
+	p, ok := u.heldForStatement(s.X)
 	if !ok {
 		return
 	}

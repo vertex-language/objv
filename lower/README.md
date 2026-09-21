@@ -531,20 +531,6 @@ expression:
 
 ## Tests
 
-`../tests/eval/` asks whether a file becomes the right IR. A file states what
-it expects as substrings of the module text:
-
-```objc
-- (int)count { return _count; }
-// vir: ptr.getaddr @_OBJC_IVAR_$_Counter$_count
-// vir: i64.sload32
-```
-
-Substrings and not line numbers, because a lowering has no line to be on: one
-statement becomes several blocks and one expression several instructions, and
-a test anchored to a line would fail on every change to the *order* things are
-emitted in rather than on a change to what is emitted.
-
-Every file must also lower without a diagnostic and pass `verify.Module`. That
-is the half of the contract no marker states, and it is the half that catches
-the bugs.
+`lower_test.go` and `builtin_test.go` check lowerings directly. What a
+lowering *does* is asked by [`tests`](../tests): 200 programs, each built by
+objv and by clang, run, and compared.

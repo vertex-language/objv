@@ -487,6 +487,12 @@ func (p *parser) isDeclStartHere() bool {
 	if p.at(token.IDENT) && p.peekTok(1).Kind == token.COLON {
 		return false
 	}
+	// No declarator starts with '.', so a name followed by one is an
+	// expression even when the name is a type: `Config.level = 9;` is a
+	// class property, reached through its class's name.
+	if p.at(token.IDENT) && p.peekTok(1).Kind == token.PERIOD {
+		return false
+	}
 	return p.isDeclSpecStart(p.tok())
 }
 

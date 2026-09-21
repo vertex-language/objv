@@ -310,6 +310,7 @@ type Field struct {
 	Type     Type
 	BitField bool
 	Width    int64 // meaningful when BitField
+	Align    int64 // _Alignas or aligned: a minimum the layout honors; 0 for none
 }
 
 // Record is a struct or union type with pointer identity.

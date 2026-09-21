@@ -6,6 +6,7 @@ package lower
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/vertex-language/ir"
 	"github.com/vertex-language/objv/analyzer"
@@ -309,10 +310,33 @@ func (u *unit) uniq(prefix string) string {
 // signature: a send is called with the arguments the method takes, and the
 // trampoline forwards whatever it was given.
 func (u *unit) extern(name string, sig *ir.Sig) *ir.FuncImport {
-	if f, ok := u.externs[name]; ok {
+	return u.importFunc(u.sym(name), sig)
+}
+
+// importFunc is the one import of a function symbol, however many ways the
+// unit reaches it. The program can declare what objv also calls --
+// <objc/message.h> declares objc_msgSend -- and the module holds one symbol
+// of a name: both are calls through its address with the signature stated
+// at the site, so whichever signature the import was made with, it serves.
+func (u *unit) importFunc(sym string, sig *ir.Sig) *ir.FuncImport {
+	if f, ok := u.externs[sym]; ok {
 		return f
 	}
-	f := u.mod.ImportFunc(u.sym(name), sig)
-	u.externs[name] = f
+	f := u.mod.ImportFunc(sym, sig)
+	if returnsTwice[strings.TrimPrefix(sym, u.symPrefix)] {
+		f.ReturnsTwice()
+	}
+	u.externs[sym] = f
 	return f
+}
+
+// returnsTwice names the C library's functions that return a second time --
+// through longjmp, or in a child after vfork. A caller's locals must stay in
+// memory across a call to one: the second return restores registers to what
+// they held at the first, and a value kept in a register instead of its slot
+// comes back as it was. clang knows these names too; the IR, told, keeps
+// every slot of such a function where it is.
+var returnsTwice = map[string]bool{
+	"setjmp": true, "_setjmp": true, "sigsetjmp": true, "__sigsetjmp": true,
+	"savectx": true, "vfork": true, "getcontext": true,
 }

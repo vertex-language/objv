@@ -35,13 +35,21 @@ func (u *unit) stmtExpr(e *ast.StmtExpr, t types.Type) ir.Value {
 	u.push()
 	u.pushARCScope()
 	u.pushVLAScope()
+	// An object value leaves the block at +1: the block's own cleanups run
+	// before the enclosing expression looks at it, and `({ Obj *t = …; t; })`
+	// would otherwise release t's object on the way out. It is a temporary
+	// of the enclosing full expression from there, as a call's result is.
+	owns := u.arcOn() && objectValued(t) && !u.isWeak(t)
+	var val ir.Value
 	defer func() {
 		u.popVLAScope()
 		u.popARCScope()
 		u.pop()
+		if owns && val != nil && u.at() {
+			u.owns(val)
+		}
 	}()
 
-	var val ir.Value
 	for i, item := range e.Body.Items {
 		last := i == len(e.Body.Items)-1
 		es, isExpr := item.(*ast.ExprStmt)
@@ -53,6 +61,17 @@ func (u *unit) stmtExpr(e *ast.StmtExpr, t types.Type) ir.Value {
 		// whose temporaries are not released where it ends: the value is
 		// still being computed. They belong to the full expression this
 		// whole block sits inside, and that statement releases them.
+		if owns {
+			v, owned := u.rvalueOwned(es.X)
+			if v != nil {
+				v = u.convert(v, u.typeOf(es.X), t)
+				if !owned {
+					v = u.retain(v, t)
+				}
+			}
+			val = v
+			continue
+		}
 		val = u.rvalue(es.X)
 		if val != nil && t != nil {
 			val = u.convert(val, u.typeOf(es.X), t)

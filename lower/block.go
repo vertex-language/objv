@@ -123,11 +123,22 @@ func (u *unit) placeCaptures(e *ast.BlockLit) ([]blockCapture, int64, bool) {
 			size = 1
 		}
 		off = alignUp(off, int64(align))
-		out = append(out, blockCapture{Capture: c, off: off, field: blockField(c.Type)})
+		field := blockField(c.Type)
+		if u.isWeak(c.Type) {
+			field = weakCaptureField
+		}
+		out = append(out, blockCapture{Capture: c, off: off, field: field})
 		off += int64(size)
 	}
 	return out, off, true
 }
+
+// weakCaptureField marks a __weak capture. It is not a BLOCK_FIELD_* code
+// and never reaches the runtime: the field is a weak reference of its own,
+// made with objc_copyWeak from the captured variable, copied with
+// objc_copyWeak and destroyed with objc_destroyWeak -- which is how clang
+// keeps `__weak Owner *w = o; o.action = ^{ … w … };` from being a cycle.
+const weakCaptureField = -1
 
 // blockField is what a copy helper does with a capture of this type.
 func blockField(t types.Type) int64 {
@@ -264,6 +275,11 @@ func (u *unit) blockInvoke(e *ast.BlockLit, sig *types.Func, caps []blockCapture
 		r, _ := u.reg(p.Type)
 		values[i] = addParam(fn, r, paramNameAt(e, i, p))
 	}
+	if sig.Variadic {
+		// ^(int n, ...) is variadic like any function: va_start needs to
+		// know, and so do the callers, which callBlock tells.
+		fn.Variadic()
+	}
 	if !types.IsVoid(sig.Ret) && !isIndirectResult(sig.Ret) {
 		r, _ := u.reg(sig.Ret)
 		setReturn(fn, r)
@@ -279,6 +295,8 @@ func (u *unit) blockInvoke(e *ast.BlockLit, sig *types.Func, caps []blockCapture
 	defer func() { entry.Br(body.To()) }()
 
 	blk, _ := self.(ir.Ptr)
+	// A strong parameter's scope, as a function's: see strongParam.
+	u.pushARCScope()
 	for i, p := range sig.Params {
 		n := paramNameAt(e, i, p)
 		if isAggregate(p.Type) {
@@ -286,11 +304,18 @@ func (u *unit) blockInvoke(e *ast.BlockLit, sig *types.Func, caps []blockCapture
 			// caller copied it, so a second copy is a copy of a copy.
 			addr, _ := values[i].(ir.Ptr)
 			u.bind(n, &storage{kind: stLocal, typ: p.Type, addr: addr})
+			if u.isARCRecord(p.Type) {
+				u.noteStrongLocal(addr, p.Type)
+			}
 			continue
 		}
-		slot := u.slot(p.Type, n+"_addr")
-		u.storeTo(slot, values[i], p.Type)
-		u.bind(n, &storage{kind: stLocal, typ: p.Type, addr: slot})
+		pt := u.strongParam(p.Type, values[i])
+		slot := u.slot(pt, n+"_addr")
+		u.storeTo(slot, u.paramValue(pt, values[i]), pt)
+		u.bind(n, &storage{kind: stLocal, typ: pt, addr: slot})
+		if u.isStrong(pt) {
+			u.noteStrongLocal(slot, pt)
+		}
 	}
 	// The captures. Each is a local whose address is inside the block, so a
 	// read of one is the ordinary load of a local and costs one add.
@@ -324,6 +349,7 @@ func (u *unit) blockInvoke(e *ast.BlockLit, sig *types.Func, caps []blockCapture
 	if e.Body != nil {
 		u.stmt(e.Body)
 	}
+	u.popARCScope()
 	if u.at() {
 		if types.IsVoid(sig.Ret) {
 			u.fn.cur.Return()
@@ -447,6 +473,18 @@ func (u *unit) stackBlock(e *ast.BlockLit, p blockParts) ir.Value {
 			u.errorf(e, "internal: the capture '"+c.Name+"' has no address")
 			return nil
 		}
+		if c.field == weakCaptureField {
+			src, ok := u.capturedAddr(st)
+			if !ok {
+				u.errorf(e, "internal: the capture '"+c.Name+"' has no address")
+				return nil
+			}
+			u.copyWeak(at(c.off), src)
+			// The field is registered with the runtime until the literal
+			// dies, which for one on the stack is its scope's end.
+			u.noteWeakLocal(at(c.off), c.Type)
+			continue
+		}
 		v := u.loadFrom(st.addr, c.Type)
 		if v == nil {
 			return nil
@@ -501,6 +539,10 @@ func (u *unit) blockCopyHelper(caps []blockCapture, name string) ir.Symbol {
 		if c.field == 0 {
 			continue
 		}
+		if c.field == weakCaptureField {
+			u.copyWeak(b.Ptr.Add(dst, b.I64.Const(c.off)), b.Ptr.Add(src, b.I64.Const(c.off)))
+			continue
+		}
 		b.Call(assign,
 			b.Ptr.Add(dst, b.I64.Const(c.off)),
 			b.Ptr.Load(b.Ptr.Add(src, b.I64.Const(c.off))),
@@ -529,6 +571,10 @@ func (u *unit) blockDisposeHelper(caps []blockCapture, name string) ir.Symbol {
 	dispose := u.extern(runtime.BlockObjectDispose, dsig)
 	for _, c := range caps {
 		if c.field == 0 {
+			continue
+		}
+		if c.field == weakCaptureField {
+			u.destroyWeak(b.Ptr.Add(src, b.I64.Const(c.off)))
 			continue
 		}
 		b.Call(dispose,
@@ -564,7 +610,21 @@ func (u *unit) callBlock(e *ast.CallExpr, bt *types.Block) ir.Value {
 		out = u.aggResult(sig.Ret)
 		args = []ir.Value{out, p}
 	}
+	fixed := -1 // how many of args precede the var-tail
+	var wbs []*writeback
 	for i, a := range e.Args {
+		if i == len(sig.Params) {
+			fixed = len(args)
+		}
+		if i < len(sig.Params) {
+			// §ARC 4.3.2's out-parameter, as for a function: `blk(&err)`
+			// hands the block a temporary and copies it back after.
+			if v, wb := u.arcOutArg(a, sig.Params[i].Type); wb != nil {
+				args = append(args, v)
+				wbs = append(wbs, wb)
+				continue
+			}
+		}
 		v := u.rvalue(a)
 		if v == nil {
 			return nil
@@ -581,8 +641,12 @@ func (u *unit) callBlock(e *ast.CallExpr, bt *types.Block) ir.Value {
 			}
 		} else {
 			if types.IsRecord(at) {
-				u.unsupported(a, "a struct or union in a variadic argument")
-				return nil
+				words, ok := u.variadicAggregate(v, at, a)
+				if !ok {
+					return nil
+				}
+				args = append(args, words...)
+				continue
 			}
 			v = u.defaultPromote(v, at)
 		}
@@ -602,7 +666,17 @@ func (u *unit) callBlock(e *ast.CallExpr, bt *types.Block) ir.Value {
 	if out != (ir.Ptr{}) {
 		lead = 2
 	}
+	if fixed < 0 {
+		fixed = len(args)
+	}
 	for i, a := range args {
+		// The var-tail is not described: on Apple's arm64 it goes on the
+		// stack where a fixed argument would be in a register, and the
+		// signature saying where it starts is what puts it there.
+		if sig.Variadic && i == fixed {
+			isig.Variadic()
+			break
+		}
 		r, ok := u.regOfValue(a)
 		if !ok {
 			u.errorf(e, "internal: an argument to a block is not a register value")
@@ -631,6 +705,7 @@ func (u *unit) callBlock(e *ast.CallExpr, bt *types.Block) ir.Value {
 		hasRet = true
 	}
 	res := u.callIndMaybeUnwind(invoke, u.namedFuncType("blocksig", isig), args...)
+	u.applyWritebacks(wbs)
 	if out != (ir.Ptr{}) {
 		return out
 	}

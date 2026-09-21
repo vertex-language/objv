@@ -23,7 +23,13 @@ func (u *unit) loadFrom(p ir.Ptr, t types.Type) ir.Value {
 	// deallocated between the read and the use, and only the runtime knows.
 	// See arc.go.
 	if u.isWeak(t) && u.arcOn() {
-		return u.loadWeak(p)
+		// Retained, and a temporary of the full expression: released
+		// where it ends. objc_loadWeak would retain and autorelease,
+		// which with no pool in place keeps the object alive forever --
+		// and a weak reference to it from ever being zeroed.
+		v := u.loadWeakRetained(p)
+		u.owns(v)
+		return v
 	}
 	if isAggregate(t) {
 		return nil

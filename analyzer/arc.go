@@ -27,6 +27,17 @@ func (c *checker) ownership(t types.Type, external bool) types.Type {
 	if !c.arc() || t == nil {
 		return t
 	}
+	// An array of object pointers is an array of __strong ones: each
+	// element owns what it holds, whether the array is a local, a global
+	// or a static (§4.1). Nested arrays likewise.
+	if a, ok := types.Unqualify(t).(*types.Array); ok {
+		elem := c.ownership(a.Elem, external)
+		if elem == a.Elem {
+			return t
+		}
+		return types.Qualify(&types.Array{Elem: elem, Form: a.Form, Len: a.Len, Static: a.Static},
+			types.QualsOf(t))
+	}
 	if !types.IsObjCObject(t) {
 		return t
 	}

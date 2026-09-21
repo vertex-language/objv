@@ -54,6 +54,10 @@ var builtins = func() map[string]builtinSpec {
 		// them and INFINITY as the other.
 		m["__builtin_inf"+w.suffix] = builtinSpec{ret: w.kind}
 		m["__builtin_huge_val"+w.suffix] = builtinSpec{ret: w.kind}
+
+		// A quiet NaN whose payload is the string literal read as an
+		// integer. <math.h> defines NAN as __builtin_nanf("0x7fc00000").
+		m["__builtin_nan"+w.suffix] = builtinSpec{ret: w.kind, params: []types.Kind{types.PointerKind}}
 	}
 
 	// The bit operations. Each comes in three widths too, but the suffix
@@ -97,6 +101,13 @@ var builtins = func() map[string]builtinSpec {
 	m["__builtin_unreachable"] = builtinSpec{ret: types.Void}
 	m["__builtin_trap"] = builtinSpec{ret: types.Void}
 	m["__builtin_constant_p"] = builtinSpec{ret: types.Int, any: true}
+
+	// §7.20's checked arithmetic, clang's spelling. Generic like the atomics:
+	// the operands are any integers and the result's type is the third
+	// argument's pointee, so there is no signature to state.
+	for _, n := range []string{"add", "sub", "mul"} {
+		m["__builtin_"+n+"_overflow"] = builtinSpec{ret: types.Bool, any: true}
+	}
 	return m
 }()
 

@@ -342,9 +342,9 @@ func (p *parser) parseDeclSpecs(sq bool) ast.DeclSpecs {
 			continue
 
 		case token.ALIGNAS:
-			if sq {
-				return specs
-			}
+			// In a SpecifierQualifierList too: §6.7.2.1 lets a struct
+			// member say `_Alignas(16) int i;`. A type name may not, which
+			// is a constraint for the analyzer and not a parse.
 			specs = append(specs, p.parseAlignas())
 			continue
 

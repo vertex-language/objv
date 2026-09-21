@@ -27,6 +27,11 @@ type Info struct {
 	// Types maps AST nodes to their declared or computed types.
 	Types map[ast.Node]types.Type
 
+	// Aligns is the alignment a declaration asked for with _Alignas or
+	// __attribute__((aligned)), by declarator, where it asked for one. The
+	// object is aligned to the larger of this and its type's.
+	Aligns map[ast.Node]int64
+
 	// Consts maps evaluated integer constant expressions to their values.
 	Consts map[ast.Expr]int64
 
@@ -75,6 +80,7 @@ func Check(unit *token.File, file *ast.File, model types.Model, mode Mode) (*Inf
 		mode:  mode,
 		info: &Info{
 			Types:  map[ast.Node]types.Type{},
+			Aligns: map[ast.Node]int64{},
 			Consts: map[ast.Expr]int64{},
 			Enums:  map[*ast.Enumerator]int64{},
 			Sends:  map[*ast.MessageExpr]*types.Method{},
@@ -212,6 +218,10 @@ func (c *checker) name(id *ast.Ident) string {
 }
 
 func (c *checker) arc() bool { return c.mode&ARC != 0 }
+
+// ARC is arc for the types package, which asks it through
+// types.ARCResolver when it builds a parameter.
+func (c *checker) ARC() bool { return c.arc() }
 
 // ---- types.Resolver ----
 //

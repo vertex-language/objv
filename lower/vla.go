@@ -9,9 +9,16 @@ import (
 
 // Lowering for C99 variable-length arrays (VLAs, §6.7.6.2).
 //
-// Array sizes are evaluated dynamically at the declaration site and allocated via alloca.
-// The enclosing block saves and restores the stack pointer to reclaim VLA space across iterations.
-// Only one-dimensional VLAs are supported.
+// A variable length is evaluated once, where its declaration is reached, and
+// the byte size of the array type it gives is recorded against that type.
+// Everything that scales by an element's size -- indexing, pointer
+// arithmetic, pointer difference, sizeof -- asks elemBytes, which answers
+// with the recorded size for a variably sized type and the constant one
+// otherwise. So `double m[r][c]` indexes rows c*8 bytes apart, and so does a
+// `double (*p)[c]` pointing into it.
+//
+// The object itself is allocated with alloca, and the enclosing block saves
+// and restores the stack pointer to give the space back.
 
 // vlaInfo is what a variably modified local remembers: how many bytes it
 // took, so that sizeof can answer.
@@ -35,7 +42,6 @@ func (u *unit) declareVLA(name string, t types.Type, it *ast.InitDeclarator) boo
 	if !isVLA(t) {
 		return false
 	}
-	arr := types.Unqualify(t).(*types.Array)
 	// A refusal still binds the name. The declaration was diagnosed and no
 	// object file will be written, so what the slot holds does not matter;
 	// what matters is that the uses below it do not each report a second
@@ -45,45 +51,20 @@ func (u *unit) declareVLA(name string, t types.Type, it *ast.InitDeclarator) boo
 		u.bind(name, &storage{kind: stLocal, typ: t, addr: u.slot(types.Typ(types.Long), name)})
 		return true
 	}
-	if hasVariableExtent(arr.Elem) {
-		return refuse("an array of more than one variably modified dimension")
-	}
 	if it.Init != nil {
 		// §6.7.6.2p5 forbids it, and the analyzer says so. Nothing to
 		// lower either way.
 		return true
 	}
-
-	lenExpr := vlaExtent(it.Decl)
-	if lenExpr == nil {
+	if !u.evalVLATypes(it.Decl, t) {
 		return refuse("this variably modified declarator")
 	}
-	n := u.rvalue(lenExpr)
-	if n == nil {
-		return true
+	bytes, ok := u.dynSize(t)
+	if !ok {
+		return refuse("this variably modified declarator")
 	}
-	// The extent is an integer of whatever type the source wrote, and the
-	// allocation takes a pointer-wide count. Widening follows the written
-	// type's signedness: `int a[n]` with n unsigned must not sign-extend a
-	// length above 2^31.
-	lt := u.typeOf(lenExpr)
-	var count ir.I64
-	switch x := n.(type) {
-	case ir.I64:
-		count = x
-	case ir.I32:
-		count = u.widen(x, lt)
-	default:
-		u.internal(it, "the length of this array")
-		return true
-	}
-
-	elem, align := u.sizeAlign(arr.Elem)
-	if elem == 0 {
-		elem = 1
-	}
+	_, align := u.sizeAlign(innermostElem(t))
 	b := u.fn.cur
-	bytes := b.I64.Mul(count, b.I64.Const(int64(elem)))
 
 	// The save happens before the first allocation in this block, so that
 	// the restore at its end gives back everything the block took.
@@ -95,6 +76,159 @@ func (u *unit) declareVLA(name string, t types.Type, it *ast.InitDeclarator) boo
 	}
 	u.bind(name, &storage{kind: stLocal, typ: t, addr: p, vla: &vlaInfo{bytes: bytes}})
 	return true
+}
+
+// innermostElem is the element type under every array dimension.
+func innermostElem(t types.Type) types.Type {
+	for {
+		a := types.AsArray(t)
+		if a == nil {
+			return t
+		}
+		t = a.Elem
+	}
+}
+
+// evalVLATypes evaluates the variable lengths a declarator gives t, in the
+// order they are written, and records the size of every variably sized
+// array type among them. It reports false for a shape it cannot pair up.
+//
+// The declarator nests the other way round from the type: in `m[r][c]` the
+// outermost ArrayDeclarator carries c, the innermost dimension. So the
+// lengths read from the outside in, reversed, are the type's arrays read
+// from the top down -- through pointers too, `(*p)[c]` being a pointer to
+// an array of c.
+func (u *unit) evalVLATypes(d ast.Declarator, t types.Type) bool {
+	lens := arrayLens(d)
+	var arrays []*types.Array
+	for cur := t; ; {
+		if a := types.AsArray(cur); a != nil {
+			arrays = append(arrays, a)
+			cur = a.Elem
+			continue
+		}
+		if p := types.AsPointer(cur); p != nil {
+			cur = p.Elem
+			continue
+		}
+		break
+	}
+	if len(arrays) != len(lens) {
+		return false
+	}
+	counts := make([]ir.I64, len(arrays))
+	for i, a := range arrays {
+		if a.Form != types.VLA {
+			continue
+		}
+		e := lens[len(lens)-1-i]
+		if e == nil {
+			return false
+		}
+		n := u.rvalue(e)
+		switch x := n.(type) {
+		case ir.I64:
+			counts[i] = x
+		case ir.I32:
+			// Widened as the written type says: `int a[n]` with n
+			// unsigned must not sign-extend a length above 2^31.
+			counts[i] = u.widen(x, u.typeOf(e))
+		default:
+			return false
+		}
+	}
+	if u.fn.vlaSize == nil {
+		u.fn.vlaSize = map[*types.Array]ir.I64{}
+	}
+	// Innermost first, so each size is there for the one above it.
+	for i := len(arrays) - 1; i >= 0; i-- {
+		a := arrays[i]
+		if a.Form != types.VLA {
+			continue
+		}
+		b := u.fn.cur
+		u.fn.vlaSize[a] = b.I64.Mul(counts[i], u.elemBytes(a.Elem))
+	}
+	return true
+}
+
+// arrayLens is the length expression of every array declarator, from the
+// outside in; nil for one with none.
+func arrayLens(d ast.Declarator) []ast.Expr {
+	var out []ast.Expr
+	for d != nil {
+		switch x := d.(type) {
+		case *ast.ArrayDeclarator:
+			out = append(out, x.Len)
+			d = x.Inner
+		case *ast.ParenDeclarator:
+			d = x.Inner
+		case *ast.PtrDeclarator:
+			d = x.Inner
+		case *ast.BlockPtrDeclarator:
+			d = x.Inner
+		default:
+			return out
+		}
+	}
+	return out
+}
+
+// isVariablyModified reports whether t has a variable length anywhere under
+// its pointers and arrays.
+func isVariablyModified(t types.Type) bool {
+	for {
+		if a := types.AsArray(t); a != nil {
+			if a.Form == types.VLA {
+				return true
+			}
+			t = a.Elem
+			continue
+		}
+		if p := types.AsPointer(t); p != nil {
+			t = p.Elem
+			continue
+		}
+		return false
+	}
+}
+
+// isVariablySized reports whether a value of t has a size known only at run
+// time: a variable-length array, or a fixed array of them.
+func isVariablySized(t types.Type) bool {
+	return isVLA(t) || (types.IsArray(t) && hasVariableExtent(t))
+}
+
+// dynSize is the run-time byte size of a variably sized type, or false for a
+// type that is not one or whose length this function never evaluated.
+func (u *unit) dynSize(t types.Type) (ir.I64, bool) {
+	a := types.AsArray(t)
+	if a == nil || u.fn == nil {
+		return ir.I64{}, false
+	}
+	if a.Form == types.VLA {
+		v, ok := u.fn.vlaSize[a]
+		return v, ok
+	}
+	if a.Form == types.FixedArray && hasVariableExtent(a.Elem) {
+		inner, ok := u.dynSize(a.Elem)
+		if !ok {
+			return ir.I64{}, false
+		}
+		b := u.fn.cur
+		return b.I64.Mul(b.I64.Const(a.Len), inner), true
+	}
+	return ir.I64{}, false
+}
+
+// elemBytes is the size of t as an i64 to scale by: the run-time size of a
+// variably sized type, and the constant size of any other.
+func (u *unit) elemBytes(t types.Type) ir.I64 {
+	if v, ok := u.dynSize(t); ok {
+		return v
+	}
+	size, _ := u.sizeAlign(t)
+	return u.fn.cur.I64.Const(int64(size))
 }
 
 // hasVariableExtent reports whether t is variably modified below its own
@@ -109,35 +243,6 @@ func hasVariableExtent(t types.Type) bool {
 			return true
 		}
 		t = a.Elem
-	}
-}
-
-// vlaExtent is the expression in the outermost pair of brackets.
-//
-// The type says the array is variably modified; only the declarator says by
-// what, because types.Array keeps a length and not an expression. The walk
-// stops at the first array declarator, which is the outermost dimension:
-// `int (*a)[n]` is a pointer and never reaches here, and `int a[n][m]` is
-// refused above.
-func vlaExtent(d ast.Declarator) ast.Expr {
-	for {
-		switch x := d.(type) {
-		case *ast.ArrayDeclarator:
-			if x.Len != nil {
-				return x.Len
-			}
-			return nil
-		case *ast.ParenDeclarator:
-			d = x.Inner
-		case *ast.PtrDeclarator:
-			d = x.Inner
-		case *ast.BlockPtrDeclarator:
-			d = x.Inner
-		case *ast.FuncDeclarator:
-			d = x.Inner
-		default:
-			return nil
-		}
 	}
 }
 
@@ -189,13 +294,15 @@ type vlaScope struct {
 // is the size the object actually has — the byte count computed where it was
 // declared, not a fresh reading of the length expression.
 func (u *unit) vlaBytes(e ast.Expr) (ir.Value, bool) {
-	id, ok := stripParens(e).(*ast.Ident)
-	if !ok {
-		return nil, false
+	if id, ok := stripParens(e).(*ast.Ident); ok {
+		if st := u.lookup(u.name(id)); st != nil && st.vla != nil {
+			return st.vla.bytes, true
+		}
 	}
-	st := u.lookup(u.name(id))
-	if st == nil || st.vla == nil {
-		return nil, false
+	// A row of one, m[i], or anything else whose type's size was
+	// recorded where it was declared.
+	if v, ok := u.dynSize(u.typeOf(e)); ok {
+		return v, true
 	}
-	return st.vla.bytes, true
+	return nil, false
 }

@@ -239,6 +239,11 @@ func (m Model) layoutWith(r *Record, offs []int64, places []BitPlace) (size, ali
 		// so that this layout and lower's cannot drift.
 		natAl := fa
 		fa = r.MemberAlign(fa)
+		// _Alignas on the member raises it past what packing allowed:
+		// the member asked for it by name.
+		if f.Align > fa {
+			fa = f.Align
+		}
 		// An unnamed bit-field carries storage but no alignment: it cannot
 		// raise the record's. lower/layout.go states the same rule and the
 		// two must agree, or layout warns about itself.

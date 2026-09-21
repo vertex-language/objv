@@ -302,8 +302,11 @@ func compatUnqual(a, b Type) bool {
 		if x.Variadic != y.Variadic || len(x.Params) != len(y.Params) {
 			return false
 		}
+		// §6.7.6.3p15: a parameter is compared as the unqualified version
+		// of its adjusted type, so `const char *restrict` and `const char *`
+		// are one parameter type, and printf is an int (*)(const char *, ...).
 		for i := range x.Params {
-			if !Compatible(AdjustParam(x.Params[i].Type), AdjustParam(y.Params[i].Type)) {
+			if !Compatible(paramForCompat(x.Params[i].Type), paramForCompat(y.Params[i].Type)) {
 				return false
 			}
 		}
@@ -505,7 +508,7 @@ func compatibleSig(a, b *Func) bool {
 		return false
 	}
 	for i := range a.Params {
-		if !compatibleErased(AdjustParam(a.Params[i].Type), AdjustParam(b.Params[i].Type)) {
+		if !compatibleErased(paramForCompat(a.Params[i].Type), paramForCompat(b.Params[i].Type)) {
 			return false
 		}
 	}
@@ -748,3 +751,7 @@ func laxVectorPair(a, b *Vector) bool {
 	sb, okb := m.Sizeof(b)
 	return oka && okb && sa == sb
 }
+
+// paramForCompat is a parameter's type as function compatibility compares
+// it: adjusted, then with its own qualifiers dropped (§6.7.6.3p15).
+func paramForCompat(t Type) Type { return Unqualify(AdjustParam(t)) }

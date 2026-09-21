@@ -320,6 +320,9 @@ func (c *checker) methodSig(m *ast.MethodDecl, owner string) *types.Method {
 		for _, part := range m.Parts {
 			pieces = append(pieces, c.name(part.Sel))
 			t := c.methodType(part.Type, types.ID())
+			if c.arc() {
+				t = types.AutoreleasingIndirect(t)
+			}
 			name := c.name(part.Name)
 			sig.Params = append(sig.Params, types.Param{Name: name, Type: t})
 		}
@@ -329,7 +332,11 @@ func (c *checker) methodSig(m *ast.MethodDecl, owner string) *types.Method {
 	for _, p := range m.Params {
 		sp := types.BuildSpecs(c.unit, p.Specs, c)
 		t, id := types.BuildDeclarator(c.unit, sp.Type, p.Decl, true, c)
-		sig.Params = append(sig.Params, types.Param{Name: c.name(id), Type: types.AdjustParam(t)})
+		t = types.AdjustParam(t)
+		if c.arc() {
+			t = types.AutoreleasingIndirect(t)
+		}
+		sig.Params = append(sig.Params, types.Param{Name: c.name(id), Type: t})
 	}
 	if sig.Sel == "" {
 		return nil

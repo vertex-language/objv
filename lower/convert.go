@@ -12,10 +12,74 @@ import (
 // is where the source language's implicit conversions become them.
 
 // convert coerces a value of from to the register type to is held in.
+//
+// A register holds more bits than a _Bool, a char or a short, so the value
+// in it is kept normalized: a _Bool is 0 or 1, and a narrow integer is its
+// value extended to 32 bits the way a load of it would. Every conversion
+// into one of those types re-establishes that, which is where C's
+// truncation to the narrow type happens.
 func (u *unit) convert(v ir.Value, from, to types.Type) ir.Value {
 	if v == nil || to == nil {
 		return v
 	}
+	if types.Unqualify(to).Kind() == types.Bool && !isBool(from) {
+		if c := u.truthOf(v); c != nil {
+			return u.fn.cur.I32.ZExtI1(*c)
+		}
+		return v
+	}
+	r := u.convertReg(v, from, to)
+	if x, ok := r.(ir.I32); ok && !u.fitsIn(from, to) {
+		return u.narrow(x, to)
+	}
+	return r
+}
+
+func isBool(t types.Type) bool {
+	return t != nil && types.Unqualify(t).Kind() == types.Bool
+}
+
+// fitsIn reports whether every value of from is already a normalized value
+// of to, so converting needs no truncation. Only a narrow to can fail it.
+func (u *unit) fitsIn(from, to types.Type) bool {
+	ts, _ := u.model.Sizeof(types.Unqualify(to))
+	if ts >= 4 || !types.IsInteger(types.Unqualify(to)) {
+		return true
+	}
+	if from == nil || !types.IsInteger(types.Unqualify(from)) {
+		return false
+	}
+	if isBool(from) {
+		return true
+	}
+	fs, _ := u.model.Sizeof(types.Unqualify(from))
+	fsig, tsig := u.signed(from), u.signed(to)
+	if fs == ts {
+		return fsig == tsig
+	}
+	// Narrower: an unsigned value fits either way; a signed one only in
+	// a signed type.
+	return fs < ts && (!fsig || tsig)
+}
+
+// narrow truncates an i32 to a 1- or 2-byte integer type and extends it back
+// the way that type's loads do.
+func (u *unit) narrow(x ir.I32, to types.Type) ir.I32 {
+	size, _ := u.model.Sizeof(types.Unqualify(to))
+	if size <= 0 || size >= 4 {
+		return x
+	}
+	b := u.fn.cur
+	bits := int64(size * 8)
+	if u.signed(to) {
+		sh := b.I32.Const(32 - bits)
+		return b.I32.SShr(b.I32.Shl(x, sh), sh)
+	}
+	return b.I32.And(x, b.I32.Const(int64(1)<<bits-1))
+}
+
+// convertReg is the conversion between register types alone.
+func (u *unit) convertReg(v ir.Value, from, to types.Type) ir.Value {
 	want, ok := u.reg(to)
 	if !ok {
 		return v

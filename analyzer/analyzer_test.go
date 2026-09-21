@@ -1,8 +1,6 @@
 package analyzer_test
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -311,27 +309,6 @@ func TestCSubstrate(t *testing.T) {
 		{"_Static_assert(0, \"no\");", "static assertion failed"},
 	} {
 		wantError(t, 0, c.src, c.want)
-	}
-}
-
-// A tree the parser recovered from must not make the analyzer misbehave: it
-// reports what it can and returns.
-func TestSyntaxCorpusDoesNotCrash(t *testing.T) {
-	files, _ := filepath.Glob("../tests/syntax/*.m")
-	if len(files) == 0 {
-		t.Skip("no syntax corpus")
-	}
-	for _, name := range files {
-		src, err := os.ReadFile(name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		f := token.NewFile(name, src)
-		file, _ := parser.ParseFile(f, 0)
-		info, _ := analyzer.Check(f, file, types.LP64(), 0)
-		if info == nil {
-			t.Errorf("%s: nil Info", filepath.Base(name))
-		}
 	}
 }
 

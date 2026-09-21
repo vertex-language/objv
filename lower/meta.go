@@ -266,12 +266,14 @@ func (u *unit) emitClass(k *types.Class) {
 // therefore a *claim* rather than a fact, and the offset variables are what
 // the truth is written into.
 func (u *unit) instanceLayout(k *types.Class) (start, size uint32) {
+	// A root class starts at zero: its isa is an instance variable it
+	// declares like any other -- NSObject's header does -- and counting a
+	// word for it here as well put every subclass's first ivar 8 bytes
+	// past where clang puts it.
 	off := uint64(0)
 	if k.Super != nil {
 		_, superSize := u.instanceLayout(k.Super)
 		off = uint64(superSize)
-	} else {
-		off = uint64(u.abi.PtrBytes) // the isa
 	}
 	start = uint32(off)
 	for i := range k.Ivars {
@@ -508,7 +510,7 @@ func (u *unit) emitPropertyList(name string, props []*types.Property, owner stri
 // propertyAttrs is the attribute string a property carries.
 func (u *unit) propertyAttrs(p *types.Property) string {
 	desc := runtime.PropertyDesc{
-		Type:      u.abi.EncodeExtended(p.Type, u.model),
+		Type:      u.abi.EncodeProperty(p.Type, u.model),
 		Readonly:  p.Has(types.PropReadonly),
 		Copy:      p.Has(types.PropCopy),
 		Retain:    p.Has(types.PropRetain) || p.Has(types.PropStrong),

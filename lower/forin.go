@@ -26,9 +26,10 @@ func (u *unit) forIn(s *ast.ForInStmt) {
 	}
 	u.push()
 	defer u.pop()
+	u.pushARCScope()
+	defer u.popARCScope()
 
-	coll := u.rvalue(s.Coll)
-	cp, ok := coll.(ir.Ptr)
+	cp, ok := u.heldForStatement(s.Coll)
 	if !ok {
 		return
 	}

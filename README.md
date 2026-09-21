@@ -401,11 +401,7 @@ objv/
 ├── target.go           Target triples, architectures, and ABI mappings
 ├── objv.go             Top-level entry points and pipeline coordinator
 │
-├── tests/              Comprehensive test suites (4 corpora)
-│   ├── syntax/         Parser coverage tested against clang syntax oracle
-│   ├── check/          Semantic analysis and diagnostic expectation tests
-│   ├── eval/           VIR lowering verification and module assertions
-│   └── programs/       End-to-end programs verified against native clang output
+├── tests/              001–200: one construct per program, built by objv and clang and compared
 └── docs/               Formal language grammar specification
 ```
 

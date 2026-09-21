@@ -146,7 +146,7 @@ func (u *unit) symOf(st *storage) ir.Symbol {
 	if st.sym == nil && st.imp != nil {
 		switch {
 		case st.imp.sig != nil:
-			st.sym = u.mod.ImportFunc(st.imp.sym, st.imp.sig)
+			st.sym = u.importFunc(st.imp.sym, st.imp.sig)
 		default:
 			st.sym = u.mod.ImportGlobal(st.imp.sym, st.imp.ftyp)
 		}

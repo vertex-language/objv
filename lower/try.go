@@ -441,16 +441,44 @@ func (u *unit) padLabel(prefix string) string {
 // jumpTo records a break or continue target with the @try depth it was made
 // at, so that a jump to it later knows how many @finally blocks it crosses.
 func (u *unit) jumpTo(b *ir.Block) jumpTarget {
-	return jumpTarget{blk: b, tries: len(u.fn.tries)}
+	return jumpTarget{blk: b, tries: len(u.fn.tries), scopes: len(u.fn.strongs), pools: len(u.fn.pools)}
 }
 
-// jumpOut ends the open path at a break or continue target.
+// jumpOut ends the open path at a break or continue target. The scopes
+// and pools the jump leaves are closed on the way, innermost first, as
+// falling off their ends would: a `continue` inside an @autoreleasepool in
+// a loop body pops that pool, and the __strong locals declared inside it
+// are released. (The locals go before the pools: a pool's body is a scope
+// inside it, which is the common shape; a local declared outside a pool
+// but inside the loop is released a little early relative to that pool.)
 func (u *unit) jumpOut(t jumpTarget) {
+	u.leaveScopes(t.scopes, t.pools)
 	if u.leaveTries(t.blk, t.tries) {
 		return
 	}
 	u.fn.cur.Br(t.blk.To())
 	u.fn.cur = nil
+}
+
+// leaveScopes releases the __strong locals of every scope at or above
+// depth scopes and pops every autorelease pool at or above depth pools,
+// without closing them: the jump leaves, but lowering carries on inside
+// them on other paths.
+func (u *unit) leaveScopes(scopes, pools int) {
+	if !u.at() {
+		return
+	}
+	for i := len(u.fn.strongs) - 1; i >= scopes && i >= 0; i-- {
+		for j := len(u.fn.strongs[i]) - 1; j >= 0; j-- {
+			u.endLocal(u.fn.strongs[i][j])
+		}
+	}
+	if len(u.fn.pools) > pools {
+		pop := u.extern(runtime.AutoreleasePoolPop, ir.NewSig().Param(ir.TypePtr))
+		for i := len(u.fn.pools) - 1; i >= pools; i-- {
+			u.fn.cur.Call(pop, u.fn.pools[i])
+		}
+	}
 }
 
 // ---- calls that may not come back ---------------------------------------
@@ -528,6 +556,7 @@ func (u *unit) callMaybeUnwind(callee ir.Callee, args ...ir.Value) results {
 	}
 	cont := u.unwindCont(callee.Signature())
 	u.fn.cur.Invoke(callee, args, cont.To(), pad)
+	u.noteInvoke(cont)
 	u.fn.cur = cont
 	return blockResults(cont)
 }
@@ -540,8 +569,18 @@ func (u *unit) callIndMaybeUnwind(p ir.Ptr, t *ir.Type, args ...ir.Value) result
 	}
 	cont := u.unwindCont(t.Sig())
 	u.fn.cur.InvokeInd(p, t, args, cont.To(), pad)
+	u.noteInvoke(cont)
 	u.fn.cur = cont
 	return blockResults(cont)
+}
+
+// noteInvoke remembers the invoke just emitted as the one cont's parameters
+// come from.
+func (u *unit) noteInvoke(cont *ir.Block) {
+	if u.fn.invokes == nil {
+		u.fn.invokes = map[*ir.Block]*ir.Inst{}
+	}
+	u.fn.invokes[cont] = u.fn.cur.Last()
 }
 
 // unwindCont is an invoke's normal target: a block whose parameters are the
@@ -583,7 +622,6 @@ func wrapResults(r ir.Results) results {
 func (u *unit) finishReturn(v ir.Value) {
 	if !u.insideFinally(0) {
 		u.releaseAllStrong()
-		u.releaseByrefs()
 		u.releasePools()
 		u.returnValue(v)
 		return
@@ -601,7 +639,6 @@ func (u *unit) finishReturn(v ir.Value) {
 
 	u.fn.cur = exit
 	u.releaseAllStrong()
-	u.releaseByrefs()
 	u.releasePools()
 	if v == nil {
 		u.returnValue(nil)
@@ -611,6 +648,15 @@ func (u *unit) finishReturn(v ir.Value) {
 }
 
 func (u *unit) returnValue(v ir.Value) {
+	autorelease := u.fn.autoreleaseOnReturn
+	u.fn.autoreleaseOnReturn = false
+	if p, ok := v.(ir.Ptr); ok && autorelease {
+		sig := ir.NewSig()
+		sig.Param(ir.TypePtr).Ret(ir.TypePtr)
+		u.fn.cur.TailCall(u.extern(runtime.AutoreleaseReturnValue, sig), p)
+		u.fn.cur = nil
+		return
+	}
 	if v == nil {
 		u.fn.cur.Return()
 	} else {

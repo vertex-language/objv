@@ -2,9 +2,11 @@ package lower
 
 import (
 	"math"
+	"strconv"
 
 	"github.com/vertex-language/ir"
 
+	"github.com/vertex-language/objv/analyzer"
 	"github.com/vertex-language/objv/ast"
 	"github.com/vertex-language/objv/types"
 )
@@ -37,6 +39,7 @@ const (
 	bMax
 	bFMA
 	bInf
+	bNaN
 	bClz
 	bCtz
 	bPopcnt
@@ -46,6 +49,9 @@ const (
 	bExpect
 	bTrap
 	bConstantP
+	bAddO
+	bSubO
+	bMulO
 	bVaStart
 	bVaEnd
 	bVaCopy
@@ -70,6 +76,7 @@ var builtinOps = func() map[string]builtinOp {
 		m["__builtin_fma"+sfx] = bFMA
 		m["__builtin_inf"+sfx] = bInf
 		m["__builtin_huge_val"+sfx] = bInf
+		m["__builtin_nan"+sfx] = bNaN
 	}
 	for _, sfx := range []string{"", "l", "ll"} {
 		m["__builtin_clz"+sfx] = bClz
@@ -84,6 +91,9 @@ var builtinOps = func() map[string]builtinOp {
 	m["__builtin_unreachable"] = bTrap
 	m["__builtin_trap"] = bTrap
 	m["__builtin_constant_p"] = bConstantP
+	m["__builtin_add_overflow"] = bAddO
+	m["__builtin_sub_overflow"] = bSubO
+	m["__builtin_mul_overflow"] = bMulO
 	m["__builtin_va_start"] = bVaStart
 	m["__builtin_va_end"] = bVaEnd
 	m["__builtin_va_copy"] = bVaCopy
@@ -108,6 +118,9 @@ func (u *unit) builtinCall(name string, e *ast.CallExpr) (ir.Value, bool) {
 	b := u.fn.cur
 
 	switch op {
+	case bAddO, bSubO, bMulO:
+		return u.overflowBuiltin(op, name, e), true
+
 	case bConstantP:
 		// "Is this a compile-time constant?" — answered no, always, and
 		// the argument is not evaluated, which is the half of the contract
@@ -130,6 +143,15 @@ func (u *unit) builtinCall(name string, e *ast.CallExpr) (ir.Value, bool) {
 
 	case bVaStart, bVaEnd, bVaCopy, bVaArgRef:
 		return u.variadicBuiltin(op, e)
+
+	case bNaN:
+		if fn := types.AsFunc(u.typeOf(e.Fun)); fn != nil {
+			if v := u.builtinNaN(e, fn.Ret); v != nil {
+				return v, true
+			}
+		}
+		u.unsupported(e, "'"+name+"' of anything but a string literal")
+		return nil, true
 
 	case bTrap:
 		// __builtin_unreachable and __builtin_trap become the same
@@ -188,6 +210,48 @@ func (u *unit) builtinCall(name string, e *ast.CallExpr) (ir.Value, bool) {
 		u.unsupported(e, "'"+name+"' on "+fn.Ret.String())
 	}
 	return out, true
+}
+
+// builtinNaN folds __builtin_nan("payload"): a quiet NaN of the return
+// type's width whose significand is the literal read as strtoull reads it,
+// cut to the significand's width, with the quiet bit set -- which is what
+// clang folds it to.
+func (u *unit) builtinNaN(e *ast.CallExpr, ret types.Type) ir.Value {
+	if len(e.Args) != 1 {
+		return nil
+	}
+	lit, ok := stripParens(e.Args[0]).(*ast.StringLit)
+	if !ok {
+		return nil
+	}
+	val := analyzer.DecodeString(u.src, lit, u.model, func(string) {})
+	var text []byte
+	for _, c := range val.Data {
+		if c == 0 {
+			break
+		}
+		text = append(text, byte(c))
+	}
+	payload, err := strconv.ParseUint(string(text), 0, 64)
+	if err != nil {
+		payload = 0
+	}
+	b := u.fn.cur
+	r, ok := u.reg(ret)
+	if !ok {
+		return nil
+	}
+	switch r {
+	case ir.TypeF32:
+		bits := uint32(0x7fc00000) | uint32(payload)&0x7fffff
+		return b.F32.Const(float64(math.Float32frombits(bits)))
+	case ir.TypeF64:
+		bits := uint64(0x7ff8000000000000) | payload&0xfffffffffffff
+		return b.F64.Const(math.Float64frombits(bits))
+	case ir.TypeF80:
+		return b.F80().Const(math.NaN())
+	}
+	return nil
 }
 
 // builtinConst is a builtin that takes nothing: the two spellings of
