@@ -521,7 +521,7 @@ func (u *unit) funcSignature(fn *ir.Func, ft *types.Func, names []*ast.Ident, at
 			continue
 		}
 		r, _ := u.reg(p.Type)
-		sig.values = append(sig.values, addParam(fn, r, name))
+		sig.values = append(sig.values, addParam(fn, r, name, u.narrowAttrs(p.Type)...))
 	}
 	if ft.Variadic {
 		// The var-tail is part of the signature and not only of the call:
@@ -585,7 +585,7 @@ func (u *unit) sigOf(ft *types.Func) (*ir.Sig, string) {
 		if !ok {
 			return nil, "a parameter of type " + p.Type.String()
 		}
-		sig.Param(r)
+		sig.Param(r, u.narrowAttrs(p.Type)...)
 	}
 	if ft.Variadic {
 		sig.Variadic()

@@ -1515,6 +1515,10 @@ func (u *unit) call(e *ast.CallExpr, t types.Type) ir.Value {
 				sig.Param(r, ir.ByVal(t))
 				continue
 			}
+			if j < len(fn.Params) {
+				sig.Param(r, u.narrowAttrs(fn.Params[j].Type)...)
+				continue
+			}
 			sig.Param(r)
 		}
 	}

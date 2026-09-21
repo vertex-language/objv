@@ -152,14 +152,37 @@ func intFType(bytes int64) ir.FType {
 	return ir.StoreI32.FType()
 }
 
+// narrowAttrs is what a parameter of type t says beyond its register type: a
+// char, short or bool is an i32 in a register but one or two bytes as a stack
+// argument on Apple's arm64, which packs them. Every signature -- a
+// definition, an import, a call site -- has to say so alike, or the two ends
+// read different bytes. See ir.Narrow.
+func (u *unit) narrowAttrs(t types.Type) []ir.ParamAttr {
+	if t == nil {
+		return nil
+	}
+	ut := types.Unqualify(t)
+	if e, ok := ut.(*types.Enum); ok {
+		ut = types.Typ(e.Underlying())
+	}
+	if !types.IsInteger(ut) {
+		return nil
+	}
+	size, _ := u.model.Sizeof(ut)
+	if size != 1 && size != 2 {
+		return nil
+	}
+	return []ir.ParamAttr{ir.Narrow(int(size), u.signed(ut))}
+}
+
 // addParam declares a parameter of the given register type. The IR spells
 // each width as its own method, so this is the one place that switch lives.
-func addParam(fn *ir.Func, r ir.RegType, name string) ir.Value {
+func addParam(fn *ir.Func, r ir.RegType, name string, attrs ...ir.ParamAttr) ir.Value {
 	switch r {
 	case ir.TypeI1:
 		return fn.ParamI1(name)
 	case ir.TypeI32:
-		return fn.ParamI32(name)
+		return fn.ParamI32(name, attrs...)
 	case ir.TypeI64:
 		return fn.ParamI64(name)
 	case ir.TypeF32:

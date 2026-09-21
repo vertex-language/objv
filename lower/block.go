@@ -273,7 +273,7 @@ func (u *unit) blockInvoke(e *ast.BlockLit, sig *types.Func, caps []blockCapture
 			continue
 		}
 		r, _ := u.reg(p.Type)
-		values[i] = addParam(fn, r, paramNameAt(e, i, p))
+		values[i] = addParam(fn, r, paramNameAt(e, i, p), u.narrowAttrs(p.Type)...)
 	}
 	if sig.Variadic {
 		// ^(int n, ...) is variadic like any function: va_start needs to
@@ -690,6 +690,10 @@ func (u *unit) callBlock(e *ast.CallExpr, bt *types.Block) ir.Value {
 		if j := i - lead; j >= 0 && j < len(sig.Params) && isAggregate(sig.Params[j].Type) {
 			t, _ := u.aggType(sig.Params[j].Type)
 			isig.Param(r, ir.ByVal(t))
+			continue
+		}
+		if j := i - lead; j >= 0 && j < len(sig.Params) {
+			isig.Param(r, u.narrowAttrs(sig.Params[j].Type)...)
 			continue
 		}
 		isig.Param(r)

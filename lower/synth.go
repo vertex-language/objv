@@ -72,7 +72,7 @@ func (u *unit) accessor(k *types.Class, sel string, value types.Type) (fn *ir.Fu
 				u.unsupported(nil, "a synthesized setter taking "+value.String())
 				return nil, ir.Ptr{}, ir.Ptr{}, ir.Ptr{}, nil, false
 			}
-			val = addParam(fn, r, "value")
+			val = addParam(fn, r, "value", u.narrowAttrs(value)...)
 		}
 	}
 	if !types.IsVoid(m.Ret) && !isIndirectResult(m.Ret) {

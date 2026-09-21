@@ -211,6 +211,10 @@ func (u *unit) sendWith(recv ir.Value, super bool, sel string, args []ir.Value,
 				sig.Param(r, ir.ByVal(t))
 				continue
 			}
+			if j >= 0 && j < len(params) {
+				sig.Param(r, u.narrowAttrs(params[j].Type)...)
+				continue
+			}
 			sig.Param(r)
 		}
 	}
