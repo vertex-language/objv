@@ -45,7 +45,11 @@ func (u *unit) initScalarOrCopy(addr ir.Ptr, t types.Type, init ast.Expr) {
 		return
 	}
 	if isAggregate(t) {
-		if p, ok := u.rvalue(init).(ir.Ptr); ok {
+		v := u.rvalue(init)
+		if isWide(t) {
+			v = u.convert(v, u.typeOf(init), t)
+		}
+		if p, ok := v.(ir.Ptr); ok {
 			if u.isARCRecord(t) {
 				if u.takeRecordTemp(p) {
 					u.copyAggregate(addr, p, t) // moved: the bytes, and the ownership

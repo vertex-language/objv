@@ -22,6 +22,9 @@ func (u *unit) convert(v ir.Value, from, to types.Type) ir.Value {
 	if v == nil || to == nil {
 		return v
 	}
+	if isWide(from) || isWide(to) {
+		return u.convertWide(v, from, to)
+	}
 	if types.Unqualify(to).Kind() == types.Bool && !isBool(from) {
 		if c := u.truthOf(v); c != nil {
 			return u.fn.cur.I32.ZExtI1(*c)

@@ -35,6 +35,16 @@ func (u *unit) constInit(e ast.Expr, t types.Type) (ir.Init, bool) {
 
 // constScalar folds one initializer that is not a braced list.
 func (u *unit) constScalar(e ast.Expr, t types.Type) (ir.Init, bool) {
+	// A 128-bit integer is two words, lo then hi. The constant evaluator
+	// works in 64 bits, so what it folds is extended as its sign says.
+	if isWide(t) {
+		v, ok := u.foldWide(e)
+		if !ok {
+			return ir.Init{}, false
+		}
+		lo, hi := wideWords(v)
+		return ir.List(ir.Lit(ir.Int(lo)), ir.Lit(ir.Int(hi))), true
+	}
 	if b, ok := stripParens(e).(*ast.BlockLit); ok {
 		return u.blockConst(b, u.typeOf(b))
 	}

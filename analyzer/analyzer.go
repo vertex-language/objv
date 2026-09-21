@@ -2,8 +2,9 @@
 // class hierarchy validation, method and property lookup, and ARC verification.
 //
 // Analysis runs in two passes:
-//   Pass 1: Collect declarations (@interface, @protocol, @class, categories).
-//   Pass 2: Check definitions, function bodies, and statements in written order.
+//
+//	Pass 1: Collect declarations (@interface, @protocol, @class, categories).
+//	Pass 2: Check definitions, function bodies, and statements in written order.
 //
 // Results are stored in Info for consumption by the lowering phase.
 package analyzer

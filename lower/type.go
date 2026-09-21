@@ -65,6 +65,8 @@ func isAggregate(t types.Type) bool {
 	switch types.Unqualify(t).Kind() {
 	case types.StructKind, types.UnionKind, types.ArrayKind:
 		return true
+	case types.Int128, types.UInt128:
+		return true // held by address, as two words: see int128.go
 	}
 	return false
 }

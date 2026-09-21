@@ -18,6 +18,9 @@ import (
 // and has no way to return one, so the only aggregate that reaches a call
 // boundary is a struct or a union.
 func (u *unit) aggType(t types.Type) (*ir.Type, bool) {
+	if isWide(t) {
+		return u.wideType(), true
+	}
 	r, ok := types.Unqualify(t).(*types.Record)
 	if !ok {
 		return nil, false

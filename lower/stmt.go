@@ -323,6 +323,9 @@ func (u *unit) returnStmt(s *ast.ReturnStmt) {
 	// there. The function's own result list is empty: what would be
 	// returned is already where the caller will read it.
 	if isIndirectResult(u.fn.ret) {
+		if isWide(u.fn.ret) {
+			v = u.convert(v, u.typeOf(s.Result), u.fn.ret)
+		}
 		src, ok := v.(ir.Ptr)
 		if !ok {
 			u.errorf(s, "internal: an aggregate result is not an address")

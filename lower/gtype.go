@@ -43,6 +43,9 @@ func (u *unit) ftype(t types.Type) (ir.FType, bool) {
 		}
 		return ir.Array(uint64(n), elem), true
 
+	case isWide(t):
+		return u.wideType().FType(), true
+
 	case types.IsRecord(t):
 		r := types.AsRecord(t)
 		st, ok := u.recordType(r)
@@ -126,6 +129,12 @@ func (u *unit) recordType(r *types.Record) (*ir.Type, bool) {
 	}
 	if r.Packed {
 		t.Pack()
+	} else if _, align := u.sizeAlign(r); align > 8 {
+		// Alignment the members' own types do not give -- _Alignas(16) on
+		// one, aligned(32) on the struct -- is stated, so that the backend
+		// places the struct where clang does: on the stack as an argument,
+		// at the boundary its alignment says.
+		t.Align(uint64(align))
 	}
 	u.records[r] = t
 	return t, true

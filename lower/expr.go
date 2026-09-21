@@ -379,10 +379,16 @@ func (u *unit) unary(e *ast.UnaryExpr, t types.Type) ir.Value {
 
 	case token.SUB:
 		v := u.rvalue(e.X)
+		if p, ok := v.(ir.Ptr); ok && isWide(u.typeOf(e.X)) {
+			return u.wideUnary(token.SUB, p)
+		}
 		return u.negate(v)
 
 	case token.TILDE:
 		v := u.rvalue(e.X)
+		if p, ok := v.(ir.Ptr); ok && isWide(u.typeOf(e.X)) {
+			return u.wideUnary(token.TILDE, p)
+		}
 		switch x := v.(type) {
 		case ir.I32:
 			return u.fn.cur.I32.Not(x)
@@ -433,6 +439,9 @@ func (u *unit) truth(e ast.Expr) *ir.I1 {
 	v := u.rvalue(e)
 	if v == nil {
 		return nil
+	}
+	if p, ok := v.(ir.Ptr); ok && isWide(u.typeOf(e)) {
+		return u.wideTruth(p)
 	}
 	return u.truthOf(v)
 }
@@ -512,6 +521,10 @@ func (u *unit) binary(e *ast.BinaryExpr, t types.Type) ir.Value {
 			return nil
 		}
 		return u.ptrCompareOrDiff(e, x, y, t)
+	}
+
+	if isWide(xt) || isWide(yt) {
+		return u.wideBinaryExpr(e, xt, yt)
 	}
 
 	x, y := u.rvalue(e.X), u.rvalue(e.Y)
@@ -1130,6 +1143,9 @@ func (u *unit) assign(e *ast.AssignExpr, t types.Type) ir.Value {
 	if e.Op == token.ASSIGN {
 		if isAggregate(at) {
 			src := u.rvalue(e.Rhs)
+			if isWide(at) {
+				src = u.convert(src, u.typeOf(e.Rhs), at)
+			}
 			if p, ok := src.(ir.Ptr); ok {
 				if u.isARCRecord(at) {
 					u.copyAssign(*addr, p, at)
@@ -1177,7 +1193,36 @@ func (u *unit) assign(e *ast.AssignExpr, t types.Type) ir.Value {
 		return v
 	}
 
-	// A compound assignment reads, operates, and writes back.
+	// A compound assignment reads, operates, and writes back -- a 128-bit
+	// one through the two-word arithmetic, from and to its storage.
+	if isWide(at) {
+		rt := u.typeOf(e.Rhs)
+		rhs := u.rvalue(e.Rhs)
+		if rhs == nil {
+			return nil
+		}
+		op := compoundOp(e.Op)
+		var res ir.Value
+		if op == token.SHL || op == token.SHR {
+			n, _ := u.convert(rhs, rt, types.Typ(types.LongLong)).(ir.I64)
+			res = u.wideShift(op, *addr, n, u.signed(at))
+		} else {
+			ct := u.compoundType(op, at, rt)
+			x, y := u.convert(*addr, at, ct), u.convert(rhs, rt, ct)
+			if isWide(ct) {
+				xp, _ := x.(ir.Ptr)
+				yp, _ := y.(ir.Ptr)
+				res = u.wideArith(op, xp, yp, u.signed(ct), e)
+			} else {
+				res = u.arith(op, x, y, u.signed(ct))
+			}
+			res = u.convert(res, ct, at)
+		}
+		if p, ok := res.(ir.Ptr); ok {
+			u.copyAggregate(*addr, p, at)
+		}
+		return *addr
+	}
 	old := u.loadFrom(*addr, at)
 	rhs := u.rvalue(e.Rhs)
 	if old == nil || rhs == nil {
@@ -1261,6 +1306,25 @@ func (u *unit) incDec(x ast.Expr, op token.Kind, t types.Type, postfix bool) ir.
 	addr, at := u.lvalue(x)
 	if addr == nil {
 		return nil
+	}
+	if isWide(at) {
+		arith := token.ADD
+		if op == token.DEC {
+			arith = token.SUB
+		}
+		var before ir.Ptr
+		if postfix {
+			before = u.slot(at, "old")
+			u.copyAggregate(before, *addr, at)
+		}
+		one, _ := u.convertWide(u.fn.cur.I32.Const(1), types.Typ(types.Int), at).(ir.Ptr)
+		if res, ok := u.wideArith(arith, *addr, one, u.signed(at), x).(ir.Ptr); ok {
+			u.copyAggregate(*addr, res, at)
+		}
+		if postfix {
+			return before
+		}
+		return *addr
 	}
 	old := u.loadFrom(*addr, at)
 	if old == nil {

@@ -102,14 +102,14 @@ type parser struct {
 
 	scopes []map[string]nameKind
 
-	protocolNames map[string]bool      // flat protocol namespace
-	classParams   map[string][]string  // generic class type parameters
-	asmLabel      *ast.StringLit       // __asm("name") declarator suffix
-	declAttrs     []*ast.Attr          // attribute list after declarator
-	inMethodType  bool                 // true inside method return/param type parens
-	pack          int64                // #pragma pack alignment ceiling (0 for none)
+	protocolNames map[string]bool     // flat protocol namespace
+	classParams   map[string][]string // generic class type parameters
+	asmLabel      *ast.StringLit      // __asm("name") declarator suffix
+	declAttrs     []*ast.Attr         // attribute list after declarator
+	inMethodType  bool                // true inside method return/param type parens
+	pack          int64               // #pragma pack alignment ceiling (0 for none)
 	packStack     []int64
-	classScopes   []int                // scope depth stack for class/protocol scopes
+	classScopes   []int // scope depth stack for class/protocol scopes
 }
 
 // ---- names ----
